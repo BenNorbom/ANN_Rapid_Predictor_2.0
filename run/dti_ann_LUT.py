@@ -225,6 +225,7 @@ good_fibs = total_fibs - len(problem_inds)
 pulse_width_count = len(pulse_widths)
 
 result_dict["problem_inds"] = problem_inds
+result_dict["valid_inds"] = [i for i in range(total_fibs) if i not in problem_inds]
 
 for i in range(len(ANN_prediction)):
     pulse_width = pulse_widths[int(i % pulse_width_count)] / 1000

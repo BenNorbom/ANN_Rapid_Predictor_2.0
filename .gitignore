@@ -1,0 +1,6 @@
+output_viz/
+.venv/
+__pycache__/
+*.pyc
+run/results.json
+.DS_Store

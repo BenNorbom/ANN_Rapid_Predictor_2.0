@@ -17,17 +17,8 @@ import os
 # Add parent directory to path for custom_types
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-# Import custom types from parent directory
-try:
-    from custom_types import *
-except ImportError:
-    print("Warning: Could not import custom_types, using defaults")
-    class Tract:
-        def __init__(self, val):
-            self.value = val
-    class Conductivity:
-        def __init__(self, val):
-            self.value = val
+# Import custom types
+from custom_types import Tract, Conductivity
 
 # Import fiber_DTI from local directory
 import fiber_DTI

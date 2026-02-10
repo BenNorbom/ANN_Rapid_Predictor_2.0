@@ -4,37 +4,8 @@ import json
 import math
 import argparse
 import numpy as np
-
-# ---- Configure Mayavi/Qt BEFORE importing mlab ----
-import os
-
-# Configure Qt backend
-os.environ['ETS_TOOLKIT'] = 'qt'
-os.environ['QT_API'] = 'pyqt5'
-os.environ['QT_QPA_PLATFORM'] = 'windows'  # Force Windows backend
-os.environ['MAYAVI_BACKEND'] = 'auto'
-
-# Initialize Qt
-from PyQt5.QtWidgets import QApplication
-
-# Create Qt application
-app = QApplication.instance()
-if app is None:
-    app = QApplication([''])
-
-# Now configure and import mayavi
-from tvtk.api import tvtk
-from mayavi import mlab
-
-# Configure rendering
-mlab.options.offscreen = False  # Use interactive mode
-mlab.options.backend = 'auto'
-
-# Create a figure with a white background
-engine = mlab.get_engine()
-if engine.current_scene is None:
-    fig = mlab.figure(size=(1024, 768), bgcolor=(1, 1, 1))
-
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 pulse_widths = [60, 75, 90, 105, 120, 135, 150, 175, 200, 225, 250, 275, 300, 350, 400, 450, 500]
 
@@ -57,96 +28,250 @@ def read_tract_file(path):
             fibers.append(pts)
     return fibers
 
+def load_valid_indices(path):
+    """Load a list of indices from a JSON [0, 1, 3...] or text file (newlines)."""
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Filter indices file not found: {path}")
+
+    # Try JSON first
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return [int(x) for x in data]
+            elif isinstance(data, dict) and 'valid_inds' in data:
+                return [int(x) for x in data['valid_inds']]
+    except Exception:
+        pass
+
+    # Fallback to text lines
+    indices = []
+    with open(path, 'r') as f:
+        for line in f:
+            parts = line.strip().split()
+            if parts:
+                indices.append(int(float(parts[0])))
+    return indices
+
 def load_thresholds(path):
     with open(path) as f:
         data = json.load(f)
-
     thresholds = []
     for pw in pulse_widths:
-        key = str(pw/1000)  # e.g., "0.06"
+        key = str(pw/1000)
         row = []
-        # data[key] is a dict: { "0": thr0, "1": thr1, ... }
-        for fib_ind in range(len(data[key])):
-            row.append(data[key][str(fib_ind)])
+        if key in data:
+            # Handle new format where thresholds are in dict or list form under the PW key
+            pw_data = data[key]
+            # Assumes keys are string numeric indices, find max key to determine list length or iterate
+            # For robustness, we'll try to reconstruct based on available keys
+            if isinstance(pw_data, dict):
+                # Sort keys numerically to ensure order [0, 1, 2...]
+                indices = sorted([int(k) for k in pw_data.keys()])
+                for idx in indices:
+                    row.append(pw_data[str(idx)])
+            elif isinstance(pw_data, list):
+                 row = pw_data
         thresholds.append(row)
     return thresholds
 
-def _bounds_from_fibers(fibers):
-    if not fibers:
-        return (0, 1), (0, 1), (0, 1)
-    xs = [p[0] for fib in fibers for p in fib]
-    ys = [p[1] for fib in fibers for p in fib]
-    zs = [p[2] for fib in fibers for p in fib]
-    return (min(xs), max(xs)), (min(ys), max(ys)), (min(zs), max(zs))
+def plot_electrode(fig, leftLeadPos, max_fiber_z=None):
+    """Add a detailed electrode visualization to the plotly figure"""
+    # Colors (match the Mayavi visualization as closely as possible)
+    lead_color = '#A6A6A6'  # ~ (0.65, 0.65, 0.65)
+    inactive_contact_color = '#404040'  # ~ (0.25, 0.25, 0.25)
+    active_contact_color = '#990000'  # ~ (0.60, 0, 0)
 
-def plot_electrode_cube(bounds, color=(0, 0, 1), opacity=0.35):
-    """Draw a translucent cuboid via a triangular mesh in Mayavi.
+    # Basic parameters (same geometry as the Mayavi lead)
+    # Use a scale factor to make the lead larger if desired
+    scale = 3.0  # increase this to make the lead even larger
+    radius = (1.27 / 2) * scale
+    # finer angular resolution for higher-definition lead mesh
+    step = np.pi / 32
+    # contact/cylinder nominal height in the original code is 1.5; scale it
+    contact_height = 1.5 * scale
 
-    bounds: [[xmin, xmax], [ymin, ymax], [zmin, zmax]]
-    """
-    (xmin, xmax), (ymin, ymax), (zmin, zmax) = bounds
-    vx = np.array([xmin, xmax, xmax, xmin, xmin, xmax, xmax, xmin], dtype=float)
-    vy = np.array([ymin, ymin, ymax, ymax, ymin, ymin, ymax, ymax], dtype=float)
-    vz = np.array([zmin, zmin, zmin, zmin, zmax, zmax, zmax, zmax], dtype=float)
+    # Get original DBS lead coordinates and create rotation matrix
+    x_temp = leftLeadPos[0]
+    y_temp = leftLeadPos[1]
+    z_temp = leftLeadPos[2]
 
-    # 12 triangles (two per face) with vertices indexed 0..7
-    tris = np.array([
-        [0,1,2], [0,2,3],   # bottom z=zmin
-        [4,5,6], [4,6,7],   # top    z=zmax
-        [0,1,5], [0,5,4],   # front  y=ymin
-        [2,3,7], [2,7,6],   # back   y=ymax
-        [1,2,6], [1,6,5],   # right  x=xmax
-        [0,3,7], [0,7,4],   # left   x=xmin
-    ], dtype=int)
+    # Translate original lead to origin for rotation basis
+    x_trans = np.subtract(x_temp, x_temp[0])
+    y_trans = np.subtract(y_temp, y_temp[0])
+    z_trans = np.subtract(z_temp, z_temp[0])
 
-    # Create points and triangles
-    points = tvtk.Points()
-    points.from_array(np.column_stack([vx, vy, vz]))
+    vectorz = [x_trans[1], y_trans[1], z_trans[1]]
+    uvz = vectorz / np.linalg.norm(vectorz)
+    uvx = np.cross(uvz, [0, 1, 0])
+    # In degenerate case uvx may be zero-length; guard against that
+    if np.linalg.norm(uvx) == 0:
+        uvx = np.array([1.0, 0.0, 0.0])
+    else:
+        uvx = uvx / np.linalg.norm(uvx)
+    uvy = np.cross(uvz, uvx)
+
+    rotation_matrix = np.array([
+        [uvx[0], uvx[1], uvx[2], 0],
+        [uvy[0], uvy[1], uvy[2], 0],
+        [uvz[0], uvz[1], uvz[2], 0],
+        [0.0, 0.0, 0.0, 1.0]
+    ])
+
+    def create_cylinder_mesh(height, position, color, is_tip=False):
+        """Create a rounded/rolled cylinder segment (or tip) and add as a Mesh3d trace."""
+        if is_tip:
+            phi, theta = np.meshgrid(
+                np.arange(np.pi/2, np.pi + step, step),
+                np.arange(0, 2 * np.pi + step, step)
+            )
+        else:
+            height_step = np.arctan2(height, radius)
+            phi, theta = np.meshgrid(
+                np.arange(np.pi/2, np.pi/2 + height_step + height_step, height_step),
+                np.arange(0, 2 * np.pi + step, step)
+            )
+
+        x = np.sin(phi) * np.cos(theta) * radius
+        y = np.sin(phi) * np.sin(theta) * radius
+        z = np.cos(phi) * radius
+
+        if not is_tip:
+            mult = 1.0 / np.cos(height_step)
+            # widen the rim as in the Mayavi code
+            x[:, 1] *= mult
+            y[:, 1] *= mult
+            z[:, 1] *= mult
+
+        # shift along the lead axis
+        z = np.add(z, height + position)
+
+        # Rotate and translate vertices into world coordinates
+        x_rot = np.empty(shape=x.shape)
+        y_rot = np.empty(shape=y.shape)
+        z_rot = np.empty(shape=z.shape)
+
+        for i, j in np.ndindex(x.shape):
+            point = np.array([x[i, j], y[i, j], z[i, j], 1.0])
+            rot_point = rotation_matrix.dot(point)
+            x_rot[i, j] = rot_point[0] + x_temp[0]
+            y_rot[i, j] = rot_point[1] + y_temp[0]
+            z_rot[i, j] = rot_point[2] + z_temp[0]
+
+        # Build triangle faces
+        vertices = np.column_stack((x_rot.flatten(), y_rot.flatten(), z_rot.flatten()))
+        tri_i = []
+        tri_j = []
+        tri_k = []
+        nrows, ncols = x_rot.shape
+        for r in range(nrows - 1):
+            for c in range(ncols - 1):
+                base = r * ncols + c
+                tri_i.extend([base, base + 1])
+                tri_j.extend([base + 1, base + ncols + 1])
+                tri_k.extend([base + ncols, base + ncols])
+
+        fig.add_trace(go.Mesh3d(
+            x=vertices[:, 0],
+            y=vertices[:, 1],
+            z=vertices[:, 2],
+            i=tri_i,
+            j=tri_j,
+            k=tri_k,
+            color=color,
+            opacity=1.0,
+            name='Electrode',
+            showlegend=False
+        ))
+
+    # Tip (rounded)
+    tip_height = contact_height - radius
+    create_cylinder_mesh(tip_height, -1 * tip_height, lead_color, is_tip=True)
+    create_cylinder_mesh(tip_height, -1 * tip_height, lead_color)
+
+    # Contacts and gaps (positions and colors mirror the Mayavi layout)
+    positions = [contact_height * i for i in range(7)]
+    colors = [
+        inactive_contact_color,  # Contact 1
+        lead_color,              # Gap 1
+        inactive_contact_color,  # Contact 2
+        lead_color,              # Gap 2
+        active_contact_color,    # Contact 3 (active)
+        lead_color,              # Gap 3
+        inactive_contact_color,  # Contact 4
+    ]
+
+    for pos, col in zip(positions, colors):
+        create_cylinder_mesh(contact_height, pos, col)
+
+    # Shaft (long rounded cylinder beyond the contacts)
+    shaft_pos = positions[-1] + contact_height
+    # compute shaft length so lead does not extend above max_fiber_z (if provided)
+    default_shaft_length = 100.0 * scale
+    shaft_length = default_shaft_length
+    if max_fiber_z is not None:
+        # uvz is unit vector along lead axis; component in world Z is uvz[2]
+        try:
+            uvz = np.array([rotation_matrix[2,0], rotation_matrix[2,1], rotation_matrix[2,2]])
+            uvz_z = uvz[2]
+        except Exception:
+            uvz_z = 0.0
+
+        # if the lead axis has a positive Z component, limit the shaft so its highest point
+        # does not exceed max_fiber_z. Add a small margin.
+        if uvz_z > 1e-6:
+            # highest z contributed by shaft end approx = z_temp[0] + uvz_z*(shaft_pos + shaft_length)
+            max_allowed = (max_fiber_z - z_temp[0]) / uvz_z - shaft_pos
+            if max_allowed < 0:
+                # no room for shaft; set to zero
+                shaft_length = 0.0
+            else:
+                shaft_length = min(default_shaft_length, max_allowed - 0.1 * scale)
+
+    create_cylinder_mesh(max(0.0, shaft_length), shaft_pos, lead_color)
+
+def plot_electrode_cube(fig, bounds, color='blue', opacity=0.35):
+    # Deprecated - now using detailed electrode visualization
+    pass
+
+def render_scene_plotly(fibers, thresholds_row, voltage_limit, leftLeadPos, title='', show_axes=False):
+    """Render the scene using Plotly."""
     
-    triangles = tvtk.CellArray()
-    triangles.from_array(tris)
-    
-    # Create mesh data
-    mesh = tvtk.PolyData()
-    mesh.points = points
-    mesh.polys = triangles
-    
-    # Add scalars
-    scalars = np.ones(len(vx), dtype=np.float32)  # Explicitly use float32
-    s = tvtk.FloatArray()
-    s.from_array(scalars)
-    s.name = 'scalars'
-    mesh.point_data.scalars = s
-    
-    # Create the visualization
-    src = mlab.pipeline.add_dataset(mesh)
-    surf = mlab.pipeline.surface(src, color=color, opacity=opacity)
+    # Create figure with subplots
+    fig = make_subplots(
+        rows=1, cols=1,
+        specs=[[{'type': 'scene'}]]
+    )
 
-def color_tuple(name):
-    if isinstance(name, tuple):
-        return name
-    # simple map for 'r','k','blue' compatibility
-    m = {
-        'r': (1, 0, 0),
-        'k': (0, 0, 0),
-        'blue': (0, 0, 1),
-        'red': (1, 0, 0),
-        'black': (0, 0, 0),
-    }
-    return m.get(name, (0.2, 0.2, 0.2))
+    # Determine max fiber Z so we can cap the lead height
+    max_fiber_z = None
+    if fibers:
+        try:
+            max_fiber_z = max(p[2] for fib in fibers for p in fib)
+        except Exception:
+            max_fiber_z = None
 
-def render_scene_mayavi(fibers, thresholds_row, voltage_limit, leftLeadPos,
-                        title='', save_png=None, interactive=False):
-    """
-    thresholds_row: list of thresholds for a SINGLE pulse width (len == n_fibers)
-    If interactive=True, show rotatable window; else just save PNG if path given.
-    """
-    # Batch rendering can be offscreen; interactive must be onscreen
-    mlab.options.offscreen = not interactive
+    # Plot each fiber (densify for higher-definition)
+    def densify_points(xs, ys, zs, factor=4):
+        if factor <= 1:
+            return xs, ys, zs
+        new_xs = []
+        new_ys = []
+        new_zs = []
+        for i in range(len(xs) - 1):
+            x0, x1 = xs[i], xs[i+1]
+            y0, y1 = ys[i], ys[i+1]
+            z0, z1 = zs[i], zs[i+1]
+            for t in np.linspace(0, 1, factor, endpoint=False):
+                new_xs.append(x0 + (x1 - x0) * t)
+                new_ys.append(y0 + (y1 - y0) * t)
+                new_zs.append(z0 + (z1 - z0) * t)
+        # append last point
+        new_xs.append(xs[-1])
+        new_ys.append(ys[-1])
+        new_zs.append(zs[-1])
+        return new_xs, new_ys, new_zs
 
-    fig = mlab.figure(bgcolor=(1, 1, 1), size=(900, 900))
-
-    # Plot fibers
     activated = []
     for i, fib in enumerate(fibers):
         thr = math.inf
@@ -155,111 +280,239 @@ def render_scene_mayavi(fibers, thresholds_row, voltage_limit, leftLeadPos,
                 thr = float(thresholds_row[i])
             except Exception:
                 thr = math.inf
-        col = color_tuple('r' if thr < voltage_limit else 'k')
+                
+        # Determine color based on threshold
+        color = 'red' if thr < voltage_limit else 'black'
         if thr < voltage_limit:
             activated.append(i)
-
+            
+        # Extract x, y, z coordinates
         xs = [p[0] for p in fib]
         ys = [p[1] for p in fib]
         zs = [p[2] for p in fib]
-        # tube_radius gives nicer 3D lines; keep small for performance
-        # Use simpler tube filter and lower quality settings to reduce texture/memory usage
-        tube = mlab.plot3d(xs, ys, zs, color=col, tube_radius=0.08, line_width=1.0, figure=fig,
-                          tube_sides=6, opacity=0.99)  # Slightly transparent to reduce texture load
-        tube.module_manager.scalar_lut_manager.show_scalar_bar = False
 
-    # Electrode cuboid (your leftLeadPos uses bounds [[x0,x1],[y0,y1],[z0,z1]])
-    plot_electrode_cube(leftLeadPos, color=color_tuple('blue'), opacity=0.40)
+        # densify points for higher-definition lines
+        xs, ys, zs = densify_points(xs, ys, zs, factor=4)
+        
+        # Add line trace for the fiber
+        fig.add_trace(
+            go.Scatter3d(
+                x=xs,
+                y=ys,
+                z=zs,
+                mode='lines',
+                line=dict(color=color, width=2),
+                name=f'Fiber {i}',
+                showlegend=False
+            )
+        )
 
-    # Scene helpers: outline of global bounds + axes gizmo
-    bx, by, bz = _bounds_from_fibers(fibers)
-    # Outline box around data bounds
-    mlab.outline(extent=(bx[0], bx[1], by[0], by[1], bz[0], bz[1]), color=(0, 0, 0), figure=fig)
-    mlab.orientation_axes(figure=fig)
+    # Add detailed electrode visualization (cap height at max_fiber_z)
+    plot_electrode(fig, leftLeadPos, max_fiber_z=max_fiber_z)
 
-    # Camera: look at center of data
-    cx = 0.5 * (bx[0] + bx[1])
-    cy = 0.5 * (by[0] + by[1])
-    cz = 0.5 * (bz[0] + bz[1])
-    mlab.view(azimuth=45, elevation=65, distance='auto', focalpoint=(cx, cy, cz), figure=fig)
-    mlab.title(title, size=0.35, height=0.96, color=(0, 0, 0), figure=fig)
+    # Build scene dict; respect show_axes flag
+    scene_dict = dict(
+        camera=dict(
+            eye=dict(x=1.5, y=1.5, z=1.5)
+        ),
+        aspectmode='data'
+    )
 
-    if save_png:
-        mlab.savefig(save_png, figure=fig, magnification=2)  # ~1800x1800
-    if interactive:
-        mlab.show()   # rotatable window
+    if not show_axes:
+        # hide axes, ticks, grid and zeroline
+        scene_dict.update(
+            xaxis=dict(visible=False, showticklabels=False, showgrid=False, zeroline=False),
+            yaxis=dict(visible=False, showticklabels=False, showgrid=False, zeroline=False),
+            zaxis=dict(visible=False, showticklabels=False, showgrid=False, zeroline=False)
+        )
 
-    mlab.close(fig)   # close regardless to match your per-PW lifecycle
-    return activated
+    # Update layout
+    fig.update_layout(
+        title=dict(
+            text=title,
+            x=0.5,
+            xanchor='center'
+        ),
+        scene=scene_dict,
+        showlegend=False,
+        margin=dict(l=0, r=0, t=30, b=0)
+    )
+    
+    return fig, activated
 
-def plot_activation_mayavi(fibers, pulse_widths, thresholds, voltage_limit, out_folder, leftLeadPos, interactive_pw=None):
+def plot_activation_plotly(fibers, pulse_widths, thresholds, voltage_limit, out_folder, leftLeadPos, interactive_pw=None, show_axes=False):
+    """Generate Plotly visualizations for fiber activation."""
     os.makedirs(out_folder, exist_ok=True)
+    
     n_fibers = len(fibers)
     n_thr_rows = len(thresholds[0]) if thresholds else 0
     if n_thr_rows < n_fibers:
-        print(f"Warning: thresholds provided for {n_thr_rows} fibers but tract has {n_fibers}. Missing => non-activated.")
+        print(f"Warning: thresholds provided for {n_thr_rows} fibers but tract has {n_fibers}")
 
     activation_summary = {}
 
     if interactive_pw is not None:
-        # Render a single PW interactively
+        # Single interactive plot
         pw_idx = int(interactive_pw)
         if pw_idx < 0 or pw_idx >= len(pulse_widths):
             raise ValueError(f"--interactive_pw {pw_idx} out of range [0, {len(pulse_widths)-1}]")
+        
         pw = pulse_widths[pw_idx]
         row = thresholds[pw_idx] if pw_idx < len(thresholds) else []
-        title = f"Pulse width: {pw} μs (index {pw_idx}) — interactive"
+        title = f"Pulse width: {pw} μs (index {pw_idx})"
+        
         print(f"Rendering interactive view for PW index {pw_idx} (PW={pw})...")
-        activated = render_scene_mayavi(
+        fig, activated = render_scene_plotly(
             fibers, row, voltage_limit, leftLeadPos,
-            title=title, save_png=None, interactive=True
+            title=title, show_axes=show_axes
         )
+        
+        # Save HTML for interactive viewing (zero-padded index for correct sorting)
+        out_html = os.path.join(out_folder, f"activation_pw_{pw_idx:02d}.html")
+        fig.write_html(out_html)
+        print(f"Saved interactive plot to {out_html}")
+        
+        # Also save static image
+        out_png = os.path.join(out_folder, f"activation_pw_{pw_idx:02d}.png")
+        fig.write_image(out_png)
+        print(f"Saved static image to {out_png}")
+        
         activation_summary[str(pw)] = activated
+        
     else:
-        # Batch over all PWs (no GUI), save PNGs
+        # Batch processing
         for pw_idx, pw in enumerate(pulse_widths):
             row = thresholds[pw_idx] if pw_idx < len(thresholds) else []
             title = f"Pulse width: {pw} μs (index {pw_idx})"
-            out_png = os.path.join(out_folder, f"activation_pw_{pw_idx}.png")
-            print(f"Rendering {out_png} ...")
-            activated = render_scene_mayavi(
+            
+            print(f"Rendering PW index {pw_idx} (PW={pw})...")
+            fig, activated = render_scene_plotly(
                 fibers, row, voltage_limit, leftLeadPos,
-                title=title, save_png=out_png, interactive=False
+                title=title, show_axes=show_axes
             )
-            print(f"Saved {out_png} (activated: {len(activated)})")
+            
+            # Save both interactive HTML and static PNG
+            # Use :02d format to ensure files like pw_02 come before pw_10 in directory listing
+            out_html = os.path.join(out_folder, f"activation_pw_{pw_idx:02d}.html")
+            out_png = os.path.join(out_folder, f"activation_pw_{pw_idx:02d}.png")
+            
+            fig.write_html(out_html)
+            fig.write_image(out_png)
+            print(f"Saved {out_html} and {out_png} (activated: {len(activated)})")
+            
             activation_summary[str(pw)] = activated
 
-    # write activation summary
-    with open(os.path.join(out_folder, 'activation_summary.json'), 'w') as f:
-        json.dump({'pulse_widths': pulse_widths, 'voltage_limit': voltage_limit, 'activated': activation_summary}, f, indent=2)
-    print(f"Wrote activation summary to {os.path.join(out_folder, 'activation_summary.json')}")
+    # Write activation summary
+    summary_path = os.path.join(out_folder, 'activation_summary.json')
+    with open(summary_path, 'w') as f:
+        json.dump({
+            'pulse_widths': pulse_widths,
+            'voltage_limit': voltage_limit,
+            'activated': activation_summary
+        }, f, indent=2)
+    print(f"Wrote activation summary to {summary_path}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Plot activation by pulse width using Mayavi (rotatable interactive or batch).")
+    parser = argparse.ArgumentParser(description="Plot activation by pulse width using Plotly (interactive 3D in browser).")
     parser.add_argument("tract_file")
     parser.add_argument("thresholds_json")
     parser.add_argument("voltage_limit", type=float)
     parser.add_argument("conductivity", choices=["anisotropic", "isotropic"])
-    parser.add_argument("out_folder")
+    mkdirp(base_out)
+
+    # Use the Mayavi-derived lead coordinates provided by the user
+    leftLeadPos = [[167, 161], [223, 222], [143, 159]]
+
+    print(f"Reading {args.tract_file}...")
+    fibers = read_tract_file(args.tract_file)
+    print(f"Read {len(fibers)} fibers")
+    
+    if args.filter_indices:
+        print(f"Loading filter indices from {args.filter_indices}...")
+        valid_indices = load_valid_indices(args.filter_indices)
+        
+        # Filter and reorder fibers to match the sequential results in thresholds_json
+        # Result "0" -> Fiber valid_indices[0], Result "1" -> Fiber valid_indices[1], etc.
+        try:
+            filtered_fibers = [fibers[idx] for idx in valid_indices]
+            print(f"Filtered fibers: kept {len(filtered_fibers)} of {len(fibers)} original fibers.")
+            fibers = filtered_fibers
+        except IndexError as e:
+            print(f"Error: filter index {e} is out of bounds for the loaded tract file.")
+            sys.exit(1)
+            activation_summary[str(pw)] = activated
+
+    # Write activation summary
+    summary_path = os.path.join(out_folder, 'activation_summary.json')
+    with open(summary_path, 'w') as f:
+        json.dump({
+            'pulse_widths': pulse_widths,
+            'voltage_limit': voltage_limit,
+            'activated': activation_summary
+        }, f, indent=2)
+    print(f"Wrote activation summary to {summary_path}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Plot activation by pulse width using Plotly (interactive 3D in browser).")
+    
+    # Required named arguments
+    parser.add_argument("--tract", required=True, dest="tract_file",
+                        help="Path to the fiber tract file (.txt)")
+    parser.add_argument("--results", required=True, dest="thresholds_json",
+                        help="Path to the simulation results JSON file")
+    parser.add_argument("--output", required=True, dest="out_folder",
+                        help="Directory to save output images and HTML files")
+    
+    # Optional arguments with defaults
+    parser.add_argument("--voltage", type=float, dest="voltage_limit", default=3.0,
+                        help="Threshold voltage (V) to determine activation (default: 3.0)")
+    parser.add_argument("--cond", choices=["anisotropic", "isotropic"], dest="conductivity", default="anisotropic",
+                        help="Conductivity type (default: anisotropic)")
+    
+    # Extra features
+    parser.add_argument("--show_axes", action="store_true",
+                       help="Show XYZ axes in the Plotly 3D scene (default: hidden)")
+    parser.add_argument("--filter_indices", type=str, default=None,
+                        help="Path to a text/JSON file listing the indices of fibers that were simulated (handles mismatches).")
     parser.add_argument("--interactive_pw", type=int, default=None,
-                        help="Render a single pulse width (index) in a rotatable window")
+                       help="Render a single pulse width (index) in an interactive plot")
+    
     args = parser.parse_args()
 
-    mkdirp(args.out_folder)
+    # create a subfolder so plotly outputs don't mix with other exporters
+    base_out = args.out_folder
+    mkdirp(base_out)
 
-    if args.conductivity == "anisotropic":
-        leftLeadPos = [[167,161],[223,222],[143,159]]
-    else:  # isotropic
-        leftLeadPos = [[0,0],[0,0],[0,10]]
+    # Use the Mayavi-derived lead coordinates provided by the user
+    leftLeadPos = [[167, 161], [223, 222], [143, 159]]
 
+    print(f"Reading {args.tract_file}...")
     fibers = read_tract_file(args.tract_file)
-    thresholds = load_thresholds(args.thresholds_json)
+    print(f"Read {len(fibers)} fibers")
+    
+    if args.filter_indices:
+        print(f"Loading filter indices from {args.filter_indices}...")
+        valid_indices = load_valid_indices(args.filter_indices)
+        
+        # Filter and reorder fibers to match the sequential results in thresholds_json
+        # Result "0" -> Fiber valid_indices[0], Result "1" -> Fiber valid_indices[1], etc.
+        try:
+            filtered_fibers = [fibers[idx] for idx in valid_indices]
+            print(f"Filtered fibers: kept {len(filtered_fibers)} of {len(fibers)} original fibers.")
+            fibers = filtered_fibers
+        except IndexError as e:
+            print(f"Error: filter index {e} is out of bounds for the loaded tract file.")
+            sys.exit(1)
 
-    print(f"Read {len(fibers)} fibers, {len(pulse_widths)} pulse widths. Voltage limit={args.voltage_limit}")
-    plot_activation_mayavi(
-        fibers, pulse_widths, thresholds, args.voltage_limit, args.out_folder,
-        leftLeadPos, interactive_pw=args.interactive_pw
+    print(f"Reading {args.thresholds_json}...")
+    thresholds = load_thresholds(args.thresholds_json)
+    if len(thresholds) != len(pulse_widths):
+        print(f"Warning: expected {len(pulse_widths)} pulse widths but got {len(thresholds)}")
+
+    plot_activation_plotly(
+        fibers, pulse_widths, thresholds, args.voltage_limit,
+        base_out, leftLeadPos, args.interactive_pw, show_axes=args.show_axes
     )
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

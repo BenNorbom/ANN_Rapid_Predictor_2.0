@@ -43,32 +43,54 @@ your_project_folder/
 
 ## Step 4: Run the Visualization Script
 
-Set-Location 'C:\Users\benbe\Research'; & "$env:USERPROFILE\venvs\viz\Scripts\Activate.ps1"; python -m pip install -U numpy; python -c "import numpy as np; print('numpy', np.__version__)"
+The arguments are now named for clarity.
 
 ```powershell
-python plot_tracts_plotly.py processed_tract.xyz.ini results.json 3.0 anisotropic output_folder
-python .\plot_tracts_plotly.py .\processed_tract.xyz.ini .\results.json 1.0 anisotropic .\output_folder --show_axes
+# Basic usage
+python plot_tracts.py --tract path/to/tract.txt --results path/to/results.json --voltage 3.0 --cond anisotropic --output output_folder
+
+# Handling filtered fibers (recommended):
+# Pass the results.json file to --filter_indices if your simulation skipped some fibers
+python plot_tracts.py --tract path/to/tract.txt --results path/to/results.json --output output_folder --filter_indices path/to/results.json
+
+# View a specific pulse width interactively only
+python plot_tracts.py --tract path/to/tract.txt --results path/to/results.json --output output_folder --interactive_pw 0
 ```
 
-Parameters explained:
-- `processed_tract.xyz.ini`: Path to your tract file
-- `results.json`: Path to your threshold results file
-- `3.0`: Voltage limit value
-- `anisotropic`: Conductivity type (choose 'anisotropic' or 'isotropic')
-- `output_folder`: Directory where visualizations will be saved
+### Arguments
+
+- `--tract`: **(Required)** Path to the fiber tract file (text format).
+- `--results`: **(Required)** Path to the JSON file with simulation results.
+- `--output`: **(Required)** Directory to save output images and HTML files.
+- `--voltage`: Threshold voltage (V) to determine activation. Default is `3.0`.
+- `--cond`: Conductivity type (`anisotropic` or `isotropic`). Default is `anisotropic`.
+- `--filter_indices`: Path to a file containing valid fiber indices (often the same as your results file).
+- `--show_axes`: Flag to show XYZ axes in the 3D scene.
+- `--interactive_pw`: Index of a single pulse width to render (0-based).
 
 ## Step 5: View the Visualizations
 
-1. Start a local web server:
-```powershell
-cd output_folder/plotly
-python -m http.server 8000
-```
+The script generates `.html` files in your output directory (e.g., `activation_pw_00.html`, `activation_pw_01.html`).
 
-2. Open your web browser and navigate to:
-```
-http://localhost:8000/activation_pw_0.html
-```
+**Option A: Use a local server (Recommended)**
+This is the best way to browse all results at once. It essentially creates a mini-website folder for your files.
+
+1.  Open your terminal/command prompt.
+2.  Navigate to your output folder:
+    ```powershell
+    cd output_folder
+    ```
+3.  Start the simple Python server:
+    ```powershell
+    python -m http.server
+    ```
+    *(If that fails, try: `python -m http.server 8000 --bind 127.0.0.1`)*
+
+4.  Open your web browser and go to: [http://localhost:8000](http://localhost:8000)
+    You will see a directory listing. Click any file to view correctly sorted results (e.g., `09` appears before `10`).
+
+**Option B: Open directly**
+Simply double-click the `.html` files in your file explorer. They will open in your default web browser where you can rotate and zoom the 3D model.
 
 ## Interacting with the 3D Visualization
 
