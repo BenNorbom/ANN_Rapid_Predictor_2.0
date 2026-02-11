@@ -9,6 +9,32 @@ from plotly.subplots import make_subplots
 
 pulse_widths = [60, 75, 90, 105, 120, 135, 150, 175, 200, 225, 250, 275, 300, 350, 400, 450, 500]
 
+
+def parse_electrode_config(config_str):
+    """Parse an electrode configuration string like '01-23', '+012-3', '-0+1-2+3'.
+
+    Returns a dict mapping contact number (0-3) to polarity:
+        '+' = anode (blue), '-' = cathode (red), None = inactive (grey).
+    """
+    contact_polarity = {0: None, 1: None, 2: None, 3: None}
+    current_sign = None
+    for ch in config_str:
+        if ch in '+-':
+            current_sign = ch
+        elif ch.isdigit():
+            contact_polarity[int(ch)] = current_sign
+            current_sign = None  # sign consumed — reset
+    return contact_polarity
+
+
+def polarity_to_color(polarity, lead_color, inactive_color):
+    """Map polarity to display color."""
+    if polarity == '-':
+        return '#CC0000'   # red  (cathode)
+    elif polarity == '+':
+        return '#0066CC'   # blue (anode)
+    return inactive_color  # grey (inactive)
+
 def mkdirp(dir):
     if not os.path.exists(dir):
         os.makedirs(dir, exist_ok=True)
@@ -75,12 +101,18 @@ def load_thresholds(path):
         thresholds.append(row)
     return thresholds
 
-def plot_electrode(fig, leftLeadPos, max_fiber_z=None):
-    """Add a detailed electrode visualization to the plotly figure"""
+def plot_electrode(fig, leftLeadPos, max_fiber_z=None, electrode_config=None):
+    """Add a detailed electrode visualization to the plotly figure.
+    
+    Parameters
+    ----------
+    electrode_config : dict or None
+        Mapping {0: '+'/'-'/None, ...} from parse_electrode_config().
+        If None, uses the legacy hardcoded layout (contact 2 active).
+    """
     # Colors (match the Mayavi visualization as closely as possible)
     lead_color = '#A6A6A6'  # ~ (0.65, 0.65, 0.65)
     inactive_contact_color = '#404040'  # ~ (0.25, 0.25, 0.25)
-    active_contact_color = '#990000'  # ~ (0.60, 0, 0)
 
     # Basic parameters (same geometry as the Mayavi lead)
     # Use a scale factor to make the lead larger if desired
@@ -191,15 +223,31 @@ def plot_electrode(fig, leftLeadPos, max_fiber_z=None):
 
     # Contacts and gaps (positions and colors mirror the Mayavi layout)
     positions = [contact_height * i for i in range(7)]
-    colors = [
-        inactive_contact_color,  # Contact 1
-        lead_color,              # Gap 1
-        inactive_contact_color,  # Contact 2
-        lead_color,              # Gap 2
-        active_contact_color,    # Contact 3 (active)
-        lead_color,              # Gap 3
-        inactive_contact_color,  # Contact 4
-    ]
+    
+    if electrode_config is not None:
+        # Build colors from electrode_config
+        # positions 0,2,4,6 are contacts; tip→shaft = contact 0,1,2,3
+        colors = []
+        contact_order = [0, 1, 2, 3]  # tip (distal) to shaft (proximal)
+        contact_slot = 0
+        for slot in range(7):
+            if slot % 2 == 0:
+                idx = contact_order[contact_slot]
+                colors.append(polarity_to_color(electrode_config.get(idx), lead_color, inactive_contact_color))
+                contact_slot += 1
+            else:
+                colors.append(lead_color)  # gap
+    else:
+        # Legacy hardcoded: contact 2 (index 4 in positions) is active
+        colors = [
+            inactive_contact_color,  # Contact 0 (tip / distal)
+            lead_color,              # Gap
+            inactive_contact_color,  # Contact 1
+            lead_color,              # Gap
+            '#990000',               # Contact 2 (active, legacy)
+            lead_color,              # Gap
+            inactive_contact_color,  # Contact 3 (shaft / proximal)
+        ]
 
     for pos, col in zip(positions, colors):
         create_cylinder_mesh(contact_height, pos, col)
@@ -234,7 +282,7 @@ def plot_electrode_cube(fig, bounds, color='blue', opacity=0.35):
     # Deprecated - now using detailed electrode visualization
     pass
 
-def render_scene_plotly(fibers, thresholds_row, voltage_limit, leftLeadPos, title='', show_axes=False):
+def render_scene_plotly(fibers, thresholds_row, voltage_limit, leftLeadPos, title='', show_axes=False, electrode_config=None):
     """Render the scene using Plotly."""
     
     # Create figure with subplots
@@ -308,7 +356,7 @@ def render_scene_plotly(fibers, thresholds_row, voltage_limit, leftLeadPos, titl
         )
 
     # Add detailed electrode visualization (cap height at max_fiber_z)
-    plot_electrode(fig, leftLeadPos, max_fiber_z=max_fiber_z)
+    plot_electrode(fig, leftLeadPos, max_fiber_z=max_fiber_z, electrode_config=electrode_config)
 
     # Build scene dict; respect show_axes flag
     scene_dict = dict(
@@ -340,7 +388,7 @@ def render_scene_plotly(fibers, thresholds_row, voltage_limit, leftLeadPos, titl
     
     return fig, activated
 
-def plot_activation_plotly(fibers, pulse_widths, thresholds, voltage_limit, out_folder, leftLeadPos, interactive_pw=None, show_axes=False):
+def plot_activation_plotly(fibers, pulse_widths, thresholds, voltage_limit, out_folder, leftLeadPos, interactive_pw=None, show_axes=False, electrode_config=None):
     """Generate Plotly visualizations for fiber activation."""
     os.makedirs(out_folder, exist_ok=True)
     
@@ -364,7 +412,7 @@ def plot_activation_plotly(fibers, pulse_widths, thresholds, voltage_limit, out_
         print(f"Rendering interactive view for PW index {pw_idx} (PW={pw})...")
         fig, activated = render_scene_plotly(
             fibers, row, voltage_limit, leftLeadPos,
-            title=title, show_axes=show_axes
+            title=title, show_axes=show_axes, electrode_config=electrode_config
         )
         
         # Save HTML for interactive viewing (zero-padded index for correct sorting)
@@ -388,7 +436,7 @@ def plot_activation_plotly(fibers, pulse_widths, thresholds, voltage_limit, out_
             print(f"Rendering PW index {pw_idx} (PW={pw})...")
             fig, activated = render_scene_plotly(
                 fibers, row, voltage_limit, leftLeadPos,
-                title=title, show_axes=show_axes
+                title=title, show_axes=show_axes, electrode_config=electrode_config
             )
             
             # Save both interactive HTML and static PNG
@@ -400,46 +448,6 @@ def plot_activation_plotly(fibers, pulse_widths, thresholds, voltage_limit, out_
             fig.write_image(out_png)
             print(f"Saved {out_html} and {out_png} (activated: {len(activated)})")
             
-            activation_summary[str(pw)] = activated
-
-    # Write activation summary
-    summary_path = os.path.join(out_folder, 'activation_summary.json')
-    with open(summary_path, 'w') as f:
-        json.dump({
-            'pulse_widths': pulse_widths,
-            'voltage_limit': voltage_limit,
-            'activated': activation_summary
-        }, f, indent=2)
-    print(f"Wrote activation summary to {summary_path}")
-
-def main():
-    parser = argparse.ArgumentParser(description="Plot activation by pulse width using Plotly (interactive 3D in browser).")
-    parser.add_argument("tract_file")
-    parser.add_argument("thresholds_json")
-    parser.add_argument("voltage_limit", type=float)
-    parser.add_argument("conductivity", choices=["anisotropic", "isotropic"])
-    mkdirp(base_out)
-
-    # Use the Mayavi-derived lead coordinates provided by the user
-    leftLeadPos = [[167, 161], [223, 222], [143, 159]]
-
-    print(f"Reading {args.tract_file}...")
-    fibers = read_tract_file(args.tract_file)
-    print(f"Read {len(fibers)} fibers")
-    
-    if args.filter_indices:
-        print(f"Loading filter indices from {args.filter_indices}...")
-        valid_indices = load_valid_indices(args.filter_indices)
-        
-        # Filter and reorder fibers to match the sequential results in thresholds_json
-        # Result "0" -> Fiber valid_indices[0], Result "1" -> Fiber valid_indices[1], etc.
-        try:
-            filtered_fibers = [fibers[idx] for idx in valid_indices]
-            print(f"Filtered fibers: kept {len(filtered_fibers)} of {len(fibers)} original fibers.")
-            fibers = filtered_fibers
-        except IndexError as e:
-            print(f"Error: filter index {e} is out of bounds for the loaded tract file.")
-            sys.exit(1)
             activation_summary[str(pw)] = activated
 
     # Write activation summary
@@ -474,8 +482,14 @@ def main():
                        help="Show XYZ axes in the Plotly 3D scene (default: hidden)")
     parser.add_argument("--filter_indices", type=str, default=None,
                         help="Path to a text/JSON file listing the indices of fibers that were simulated (handles mismatches).")
+    parser.add_argument("--all_fibers", action="store_true",
+                        help="Plot ALL fibers at full length, ignoring the filter_indices file. "
+                             "Fibers without a threshold are drawn as inactive.")
     parser.add_argument("--interactive_pw", type=int, default=None,
                        help="Render a single pulse width (index) in an interactive plot")
+    parser.add_argument("--electrode_config", type=str, default=None,
+                        help="Electrode contact configuration, e.g. '01-23', '+012-3', '-0+1-2+3'. "
+                             "'-' = cathode (red), '+' = anode (blue), unmarked = inactive (grey).")
     
     args = parser.parse_args()
 
@@ -490,7 +504,9 @@ def main():
     fibers = read_tract_file(args.tract_file)
     print(f"Read {len(fibers)} fibers")
     
-    if args.filter_indices:
+    if args.all_fibers:
+        print(f"--all_fibers: showing all {len(fibers)} fibers (no FEM filter).")
+    elif args.filter_indices:
         print(f"Loading filter indices from {args.filter_indices}...")
         valid_indices = load_valid_indices(args.filter_indices)
         
@@ -504,6 +520,8 @@ def main():
             print(f"Error: filter index {e} is out of bounds for the loaded tract file.")
             sys.exit(1)
 
+    electrode_config = parse_electrode_config(args.electrode_config) if args.electrode_config else None
+
     print(f"Reading {args.thresholds_json}...")
     thresholds = load_thresholds(args.thresholds_json)
     if len(thresholds) != len(pulse_widths):
@@ -511,7 +529,8 @@ def main():
 
     plot_activation_plotly(
         fibers, pulse_widths, thresholds, args.voltage_limit,
-        base_out, leftLeadPos, args.interactive_pw, show_axes=args.show_axes
+        base_out, leftLeadPos, args.interactive_pw, show_axes=args.show_axes,
+        electrode_config=electrode_config
     )
 
 if __name__ == "__main__":

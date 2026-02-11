@@ -40,7 +40,8 @@ class DTI_tracts:
         shift_fibers_to_origin = False,
         spline_smoothing = 0.2,
         node_count_requirement = 21,
-        add_shift_fibers = False
+        add_shift_fibers = False,
+        custom_center = None
     ):
         """
         Initialize the DTI_tracts class, load fiber tracts, apply spline interpolation,
@@ -66,6 +67,9 @@ class DTI_tracts:
             Set a lower limit on the length of fibers to make predictions on
         add_shift_fibers : int
             Translate the pathways independent of the DBS lead
+        custom_center : list [x, y, z]
+            Optional. If provided, overrides the default lead position and shifts fibers
+            such that this center becomes (0,0,0).
 
         Attributes
         ----------
@@ -99,7 +103,14 @@ class DTI_tracts:
         self.node_count_requirement = node_count_requirement
         self.add_shift_fibers = add_shift_fibers
         self.take_every = 3 if tract==Tract.DTI else 1
-        self.leftLeadPos = [[167,161],[223,222],[143,159]] if conductivity==Conductivity.ANISOTROPIC else [[0,0],[0,0],[0,10]]
+        
+        if custom_center is not None:
+             # Create a virtual vertical lead segment centered at custom_center
+             # Length 10mm (arbitrary, only used for intersection checks)
+             cx, cy, cz = custom_center
+             self.leftLeadPos = [[cx, cx], [cy, cy], [cz-5, cz+5]]
+        else:
+            self.leftLeadPos = [[167,161],[223,222],[143,159]] if conductivity==Conductivity.ANISOTROPIC else [[0,0],[0,0],[0,10]]
 
         self.xCompPos = []
         self.yCompPos = []
@@ -144,16 +155,24 @@ class DTI_tracts:
             spline_yPosL.append(y_step)
             spline_zPosL.append(z_step)
 
-        if self.shift_fibers_to_origin:
+        # No fiber shifting when custom_center is used — fibers stay in their original space.
+        # The FEM bounds and voltage lookups are shifted instead (handled in dti_ann_LUT.py).
+
+        if custom_center is None and self.shift_fibers_to_origin:
+            # Original shift-to-origin logic (used when conductivity is anisotropic, no custom center)
+            dx = self.anisotropic_leftLeadPos[0][0]
+            dy = self.anisotropic_leftLeadPos[1][0]
+            dz = self.anisotropic_leftLeadPos[2][0]
             self.leftLeadPos = [[0,0],[0,0],[0,10]]
-            spline_xPosL = np.subtract(spline_xPosL, self.anisotropic_leftLeadPos[0][0])
-            spline_yPosL = np.subtract(spline_yPosL, self.anisotropic_leftLeadPos[1][0])
-            spline_zPosL = np.subtract(spline_zPosL, self.anisotropic_leftLeadPos[2][0])
+            spline_xPosL = [x - dx for x in spline_xPosL]
+            spline_yPosL = [y - dy for y in spline_yPosL]
+            spline_zPosL = [z - dz for z in spline_zPosL]
 
         if self.add_shift_fibers:
-            spline_xPosL = np.subtract(spline_xPosL, self.add_x_shift)
-            spline_yPosL = np.subtract(spline_yPosL, self.add_y_shift)
-            spline_zPosL = np.subtract(spline_zPosL, self.add_z_shift)
+            # Also fix this for ragged arrays
+            spline_xPosL = [x - self.add_x_shift for x in spline_xPosL]
+            spline_yPosL = [y - self.add_y_shift for y in spline_yPosL]
+            spline_zPosL = [z - self.add_z_shift for z in spline_zPosL]
 
         self.xCompPos = spline_xPosL
         self.yCompPos = spline_yPosL

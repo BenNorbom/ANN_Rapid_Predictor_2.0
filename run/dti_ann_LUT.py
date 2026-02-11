@@ -42,8 +42,30 @@ ANN_model = sys.argv[3]
 output_json = sys.argv[4]
 centering_strategy = sys.argv[5]
 tractType = Tract(sys.argv[6])
-electrode1FileConductivity = Conductivity(sys.argv[7])
-regression_mode = sys.argv[8]  # "reg" or "class"
+
+# Parse conductivity or explicit coordinates
+custom_center = None
+try:
+    # Try to parse 3 float coordinates
+    cx = float(sys.argv[7])
+    cy = float(sys.argv[8])
+    cz = float(sys.argv[9])
+    custom_center = [cx, cy, cz]
+    
+    # If successful, we assume the next argument is regression mode
+    # Defaulting conductivity to ANISOTROPIC for model bounds purposes if not specified? 
+    # Usually ANN models are trained with specific conductivity assumptions.
+    # The 'anisotropic' vs 'isotropic' arg mainly affects the FEM bounds (Active Region).
+    # We will default to Anisotropic bounds as they are generally wider/standard for this project.
+    electrode1FileConductivity = Conductivity("anisotropic") 
+    regression_mode = sys.argv[10]
+    
+except ValueError:
+    # Fallback to original behavior: arg 7 is conductivity string
+    electrode1FileConductivity = Conductivity(sys.argv[7])
+    regression_mode = sys.argv[8]
+
+ANN_REGRESSION = 1 if regression_mode.lower() == "reg" else 0
 EXP_EXTRAPOLATE = True
 
 
@@ -52,14 +74,52 @@ node_to_node = 0.5
 
 fem = FEM.FEMgrid(electrode1File)
 grid_e1 = fem.get3dGrid()
-fem_bounds = fem.getFEMBounds()
+fem_bounds_original = fem.getFEMBounds()
+
+# When custom_center is provided, the 3 coordinates specify the CENTER
+# of the FEM bounding box in the fiber's coordinate space.
+# Fibers are NOT moved. Instead, FEM bounds are re-centered and voltage
+# lookups translate fiber coords back to the original FEM grid space.
+fem_offset = [0.0, 0.0, 0.0]  # offset to subtract from fiber coords when querying FEM grid
+
+if custom_center is not None:
+    # Compute original FEM center
+    orig_cx = (fem_bounds_original[0][0] + fem_bounds_original[0][1]) / 2.0
+    orig_cy = (fem_bounds_original[1][0] + fem_bounds_original[1][1]) / 2.0
+    orig_cz = (fem_bounds_original[2][0] + fem_bounds_original[2][1]) / 2.0
+    
+    # Half-widths
+    hw_x = (fem_bounds_original[0][1] - fem_bounds_original[0][0]) / 2.0
+    hw_y = (fem_bounds_original[1][1] - fem_bounds_original[1][0]) / 2.0
+    hw_z = (fem_bounds_original[2][1] - fem_bounds_original[2][0]) / 2.0
+    
+    # New center is the user-specified custom_center
+    new_cx, new_cy, new_cz = custom_center
+    
+    # Shift FEM bounds to be centered at custom_center
+    fem_bounds = [
+        [new_cx - hw_x, new_cx + hw_x],
+        [new_cy - hw_y, new_cy + hw_y],
+        [new_cz - hw_z, new_cz + hw_z],
+    ]
+    
+    # Offset: to query the original FEM grid, subtract this from fiber coords
+    fem_offset = [new_cx - orig_cx, new_cy - orig_cy, new_cz - orig_cz]
+    
+    print(f"Original FEM center: ({orig_cx}, {orig_cy}, {orig_cz})")
+    print(f"New FEM center (custom): ({new_cx}, {new_cy}, {new_cz})")
+    print(f"Shifted FEM bounds to: X={fem_bounds[0]}, Y={fem_bounds[1]}, Z={fem_bounds[2]}")
+    print(f"FEM query offset: ({fem_offset[0]}, {fem_offset[1]}, {fem_offset[2]})")
+else:
+    fem_bounds = fem_bounds_original
 
 test_dti = process_DTI.DTI_tracts(
     tractFile, 
     fem_bounds, 
     node_to_node,
     tractType,
-    electrode1FileConductivity
+    electrode1FileConductivity,
+    custom_center=custom_center
 )
 ANN_model = ann_predict_lib.ANN(ANN_model)
 ann_hparam_dict = ANN_model.get_hparam_dict()
@@ -122,7 +182,11 @@ for fib in range(len(xNodeComp)):
     for i in range(len(xNodeComp[fib])):
         try:
                     
-            fiberLVoltages.append(float(grid_e1( [xNodeComp[fib][i], yNodeComp[fib][i], zNodeComp[fib][i]] )))
+            # Translate fiber coords back to original FEM grid space for voltage lookup
+            query_x = xNodeComp[fib][i] - fem_offset[0]
+            query_y = yNodeComp[fib][i] - fem_offset[1]
+            query_z = zNodeComp[fib][i] - fem_offset[2]
+            fiberLVoltages.append(float(grid_e1( [query_x, query_y, query_z] )))
                     
         except Exception as e:
             print("WARNING: 3d-position out of COMSOL range! X = " + str(xNodeComp[fib][i]) + ", Y = " + str(yNodeComp[fib][i]) + ", Z = " + str(zNodeComp[fib][i]))
@@ -205,6 +269,17 @@ flattened_input = [item for sublist in input_array for item in sublist]
 for value in flattened_input:
     if value is None:
         print("VALUE IS NONE!")
+
+if len(input_array) == 0:
+    print("\nERROR: No valid fibers found within range of the electrode.")
+    print("This means all fibers were outside the FEM bounding box after shifting.")
+    print("Check that your center coordinates place the electrode inside the fiber bundle.")
+    result_dict = {"problem_inds": problem_inds, "valid_inds": [], "warning": "No fibers in range"}
+    with open(output_json, 'w') as outfile:
+        json.dump(result_dict, outfile, indent=4)
+    print(f"Wrote empty results to {output_json}")
+    sys.exit(0)
+
 if ANN_REGRESSION == 1:
     prediction_start_time = time.time()
     ANN_prediction = ANN_model.batch_predict_threshold_reg(input_array)

@@ -1,172 +1,181 @@
-# Neural Tract Visualization Setup Guide
+# Visualization Scripts
 
-This guide will help you set up and run the 3D neural tract visualization tool.
+This directory contains three visualization scripts for tractography activation results.
+All produce interactive 3D HTML plots rendered with Plotly.
 
-## Prerequisites
+---
 
-- Python 3.10 or higher
-- pip (Python package installer)
+## plot_tracts_fast.py
 
-## Step 1: Create and Activate Virtual Environment
+Fast 3D visualization designed to handle 100,000+ fibers efficiently by merging
+all fiber geometry into just two WebGL traces (activated and inactive).
 
-```powershell
-# Create a new virtual environment
-python -m venv venvs/viz
+### Usage
 
-# Activate the virtual environment
-# On Windows:
-.\venvs\viz\Scripts\Activate.ps1
-# On Linux/Mac:
-# source venvs/viz/bin/activate
+```bash
+python graphing/plot_tracts_fast.py --tract <TRACT_FILE> --results <RESULTS_JSON> --output <OUTPUT_DIR> [options]
 ```
 
-## Step 2: Install Required Packages
+### Required Arguments
 
-```powershell
-# Install required packages
-python -m pip install numpy plotly kaleido
-```
+| Argument | Description |
+|----------|-------------|
+| `--tract FILE` | Path to the tract text file (one fiber per line: `x1 y1 z1 x2 y2 z2 ...`). |
+| `--results FILE` | Path to the JSON results file produced by `dti_ann_LUT.py`. |
+| `--output DIR` | Directory where HTML plots will be saved. |
 
-## Step 3: Prepare Your Data Files
+### Optional Arguments
 
-You need two input files:
-1. Tract file (`.xyz` or `.xyz.ini` format) containing fiber coordinates
-2. Results JSON file containing threshold data
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--activation_threshold VOLTS` | `3.0` | Voltage (V) below which a fiber is considered **activated**. |
+| `--electrode_center X Y Z` | `0 0 0` | X Y Z position of the electrode for display. |
+| `--electrode_config CONFIG` | none | Contact configuration string (e.g. `01-23`, `+012-3`, `-0+1-2+3`). `-` = cathode (red), `+` = anode (blue), unmarked = inactive (grey). Each sign applies only to the immediately following digit. |
+| `--downsample N` | `1` | Keep every Nth point per fiber to speed up rendering. |
+| `--show_axes` | off | Show X/Y/Z axes in the 3D scene. |
+| `--all_fibers` | off | Plot ALL fibers at full length, ignoring the `valid_inds` filter. Fibers without a threshold are drawn as inactive. |
 
-Example file structure:
-```
-your_project_folder/
-├── processed_tract.xyz.ini    # Fiber tract data
-├── results.json               # Threshold results
-└── plot_tracts_plotly.py     # Visualization script
-```
+### Electrode Rendering
 
-## Step 4: Run the Visualization Script
+The script renders a detailed 3D mesh electrode model (Medtronic 3387 geometry)
+with four contacts, a rounded tip, insulating gaps, and a shaft. Contacts are
+coloured according to `--electrode_config`:
+- **Contact 0** = tip (distal end)
+- **Contact 3** = shaft (proximal end)
 
-The arguments are now named for clarity.
+### Pulse Width Auto-Detection
 
-```powershell
+The script automatically reads whatever pulse widths are present in the results
+JSON file. There is no need to specify them — if the simulation ran one pulse
+width, one plot is generated; if it ran all 17, you get 17 plots.
+
+### Examples
+
+```bash
 # Basic usage
-python plot_tracts.py --tract path/to/tract.txt --results path/to/results.json --voltage 3.0 --cond anisotropic --output output_folder
+python graphing/plot_tracts_fast.py \
+    --tract example_tracks/whole_brain.txt \
+    --results run/results.json \
+    --output output_viz/
 
-# Handling filtered fibers (recommended):
-# Pass the results.json file to --filter_indices if your simulation skipped some fibers
-python plot_tracts.py --tract path/to/tract.txt --results path/to/results.json --output output_folder --filter_indices path/to/results.json
+# Custom settings with electrode config
+python graphing/plot_tracts_fast.py \
+    --tract example_tracks/whole_brain.txt \
+    --results run/results.json \
+    --output output_viz/ \
+    --activation_threshold 2.5 \
+    --electrode_center 38 50 30 \
+    --electrode_config 01-23 \
+    --downsample 3
 
-# View a specific pulse width interactively only
-python plot_tracts.py --tract path/to/tract.txt --results path/to/results.json --output output_folder --interactive_pw 0
+# Show all fibers regardless of FEM bounds
+python graphing/plot_tracts_fast.py \
+    --tract example_tracks/whole_brain.txt \
+    --results run/results.json \
+    --output output_viz/ \
+    --all_fibers --show_axes
+```
+
+---
+
+## plot_tracts.py
+
+Original visualization script with per-fiber rendering and detailed 3D electrode
+mesh. Better suited for smaller tract files or when you need single pulse-width
+interactive plots.
+
+### Usage
+
+```bash
+python graphing/plot_tracts.py --tract <TRACT_FILE> --results <RESULTS_JSON> --output <OUTPUT_DIR> [options]
 ```
 
 ### Arguments
 
-- `--tract`: **(Required)** Path to the fiber tract file (text format).
-- `--results`: **(Required)** Path to the JSON file with simulation results.
-- `--output`: **(Required)** Directory to save output images and HTML files.
-- `--voltage`: Threshold voltage (V) to determine activation. Default is `3.0`.
-- `--cond`: Conductivity type (`anisotropic` or `isotropic`). Default is `anisotropic`.
-- `--filter_indices`: Path to a file containing valid fiber indices (often the same as your results file).
-- `--show_axes`: Flag to show XYZ axes in the 3D scene.
-- `--interactive_pw`: Index of a single pulse width to render (0-based).
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--tract FILE` | required | Path to the fiber tract file. |
+| `--results FILE` | required | Path to the results JSON file. |
+| `--output DIR` | required | Directory to save output files. |
+| `--voltage VOLTS` | `3.0` | Activation threshold voltage. |
+| `--cond TYPE` | `anisotropic` | Conductivity type: `anisotropic` or `isotropic`. |
+| `--show_axes` | off | Show XYZ axes. |
+| `--filter_indices FILE` | none | Path to a file listing the indices of fibers that were simulated. |
+| `--all_fibers` | off | Plot ALL fibers, ignoring the filter_indices file. |
+| `--interactive_pw INDEX` | none | Render a single pulse width (index) interactively. |
+| `--electrode_config CONFIG` | none | Electrode contact configuration string. |
 
-## Step 5: View the Visualizations
+---
 
-The script generates `.html` files in your output directory (e.g., `activation_pw_00.html`, `activation_pw_01.html`).
+## plot_tracts_bundles.py
 
-**Option A: Use a local server (Recommended)**
-This is the best way to browse all results at once. It essentially creates a mini-website folder for your files.
+Bundle-aware visualization that colours each tract bundle differently.
+Requires a manifest JSON (produced by `move_whole_brain_tracts.py`) to identify
+which fibers belong to which bundle.
 
-1.  Open your terminal/command prompt.
-2.  Navigate to your output folder:
-    ```powershell
-    cd output_folder
-    ```
-3.  Start the simple Python server:
-    ```powershell
-    python -m http.server
-    ```
-    *(If that fails, try: `python -m http.server 8000 --bind 127.0.0.1`)*
+### Usage
 
-4.  Open your web browser and go to: [http://localhost:8000](http://localhost:8000)
-    You will see a directory listing. Click any file to view correctly sorted results (e.g., `09` appears before `10`).
+```bash
+python graphing/plot_tracts_bundles.py \
+    --tract <MERGED_TRACT_FILE> --results <RESULTS_JSON> \
+    --manifest <MANIFEST_JSON> --output <OUTPUT_DIR> [options]
+```
+
+### Required Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `--tract FILE` | Path to the merged tract file (whole-brain + bundles). |
+| `--results FILE` | Path to the JSON results file from `dti_ann_LUT.py`. |
+| `--manifest FILE` | Path to the manifest JSON from `move_whole_brain_tracts.py`. |
+| `--output DIR` | Directory where HTML plots will be saved. |
+
+### Optional Arguments
+
+Same as `plot_tracts_fast.py`: `--activation_threshold`, `--electrode_center`,
+`--electrode_config`, `--downsample`, `--show_axes`, `--all_fibers`.
+
+### Bundle Colour Scheme
+
+| Bundle | Activated | Inactive |
+|--------|-----------|----------|
+| Whole-brain | Red | Black (transparent) |
+| DRTT | Lime green | Dark green |
+| ML | Cyan | Teal |
+| PRT | Magenta | Purple |
+
+### Example
+
+```bash
+python graphing/plot_tracts_bundles.py \
+    --tract merged_tracts.txt \
+    --results run/results.json \
+    --manifest merged_tracts_manifest.json \
+    --output output_viz_whole_brain/ \
+    --electrode_center 38 50 30 \
+    --electrode_config 01-23 \
+    --all_fibers --show_axes
+```
+
+---
+
+## Viewing the Output
+
+All scripts generate `.html` files in your output directory (e.g.
+`activation_pw_00_60us.html`).
+
+**Option A: Local server (recommended for many files)**
+```bash
+cd output_viz
+python -m http.server
+```
+Then open [http://localhost:8000](http://localhost:8000) in your browser.
 
 **Option B: Open directly**
-Simply double-click the `.html` files in your file explorer. They will open in your default web browser where you can rotate and zoom the 3D model.
+Double-click any `.html` file to open it in your browser.
 
-## Interacting with the 3D Visualization
-
-- Left click + drag: Rotate the view
-- Right click + drag: Zoom in/out
-- Middle click + drag: Pan the view
-- Double click: Reset the view
-
-## Output Files
-
-The script generates two types of files for each pulse width:
-1. Interactive HTML files (`activation_pw_X.html`)
-2. Static PNG images (`activation_pw_X.png`)
-3. Summary JSON file (`activation_summary.json`)
-
-## Troubleshooting
-
-1. If packages fail to install:
-```powershell
-python -m pip install --upgrade pip
-python -m pip install numpy plotly kaleido --no-cache-dir
-```
-
-2. If the web browser won't open local HTML files directly:
-Always use the local server method (Step 5) to view the visualizations.
-
-3. If you see import errors:
-Make sure you've activated the virtual environment and installed all required packages.
-
-## Script Options
-
-Optional parameters:
-- `--interactive_pw INDEX`: Generate visualization for a single pulse width index
-  Example: `python plot_tracts_plotly.py processed_tract.xyz.ini results.json 3.0 anisotropic output_folder --interactive_pw 0`
- - `--show_axes`: Show the XYZ axes in the Plotly 3D scene. By default the exporter hides axes for a cleaner visualization. Example:
-   `python plot_tracts_plotly.py processed_tract.xyz.ini results.json 3.0 anisotropic output_folder --show_axes`
-
-## Example File Formats
-
-1. Tract file format (`.xyz` or `.xyz.ini`):
-```
-x1 y1 z1 x2 y2 z2 x3 y3 z3  # Points for fiber 1
-x1 y1 z1 x2 y2 z2           # Points for fiber 2
-...
-```
-
-2. Results JSON format:
-```json
-{
-  "0.06": {                  # Pulse width in seconds (60μs)
-    "0": threshold_value,    # Threshold for fiber 0
-    "1": threshold_value,    # Threshold for fiber 1
-    ...
-  },
-  "0.075": {                 # Next pulse width (75μs)
-    ...
-  }
-}
-```
-
-open interactive images with this link...
-cd output_folder; python -m http.server 8000
-http://localhost:8000/index.html
-
-## Plotly exporter — recent changes
-
-The Plotly exporter (`plot_tracts_plotly.py`) has been updated. If you are using it, please note the following changes and options:
-
-- **Lead coordinates (Mayavi-derived)**: the script now uses the following `leftLeadPos` by default to match the Mayavi visualizations:
-
-  ```python
-  leftLeadPos = [[167, 161], [223, 222], [143, 159]]
-  ```
-
-- **Dependencies**: ensure `plotly` and `kaleido` are installed in your environment:
-
-  ```powershell
-  python -m pip install -U plotly kaleido
-  ```
+### 3D Navigation
+- **Left-click + drag** — Rotate
+- **Right-click + drag** — Zoom
+- **Middle-click + drag** — Pan
+- **Double-click** — Reset view
