@@ -11,18 +11,18 @@ Computational models are powerful tools that can enable the optimization of deep
    ```
 
 2. Pull example tracks:
-   To run the quick start examples, you'll need the tract files. You can pull just these files (~246 KB) without downloading the entire large file history:
+   To run the quick start examples, you'll need the tract files. You can pull just these files without downloading the entire large file history:
    ```bash
    git lfs pull -I "example_tracks/**"
    ```
 
-3. **(Important)** Pull large model and electrode files:
-   This repository uses Git LFS for large files. Run the following command to download all remaining necessary files (approx. 669 MB):
+3. Pull large model and electrode files:
+   This repository uses Git LFS for large files. Run the following command to download all remaining necessary files:
    ```bash
    git lfs pull
    ```
 
-   **Selective Download:**
+   **Selective Download (Suggested):**
    If you only need specific electrode files (to save bandwidth/disk space), you can pull them individually using the `-I` (include) flag. For example:
    ```bash
    git lfs pull -I "electrodes/directed/monopolar/bsc_directional_anisotropic_monopolar_01(a,b,c)2(-a,b,c)3.txt"
