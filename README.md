@@ -29,14 +29,22 @@ Computational models are powerful tools that can enable the optimization of deep
    ```
 
 4. Create a Python 3.10 virtual environment and install dependencies:
+
+   > **Important:** Python 3.10 is required. TensorFlow 2.15 does not support Python 3.11 or newer. If you have multiple Python versions installed, use the `py -3.10` launcher (Windows) or `python3.10` (Linux/Mac) to target the correct version.
+
+   **Windows:**
    ```bash
-   python -m venv .venv
-   .venv\Scripts\activate      # Windows
-   # source .venv/bin/activate  # Linux/Mac
+   py -3.10 -m venv .venv
+   .venv\Scripts\activate
    pip install -r requirements.txt
    ```
 
-> **Note:** Python 3.10 is required for TensorFlow 2.15 compatibility.
+   **Linux/Mac:**
+   ```bash
+   python3.10 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
 
 ## Quick Start
 

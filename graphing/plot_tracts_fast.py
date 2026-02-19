@@ -2,10 +2,11 @@
 Fast 3D visualization for large tractography datasets.
 
 Reads ANN prediction results and the corresponding tract file, then generates
-interactive Plotly HTML plots showing activated vs. inactive fibers.
+interactive Plotly HTML plots showing activated vs. inactive fibers with an
+optional electric-field isosurface from the electrode FEM data.
 
-Key design: Only TWO Plotly traces are created (one red "Activated", one grey
-"Inactive"), with individual fibers merged into single coordinate arrays
+Key design: Only TWO Plotly traces are created for fibers (one red "Activated",
+one grey "Inactive"), with individual fibers merged into single coordinate arrays
 separated by NaN.  This lets the browser render 100k+ fibers in real-time.
 """
 
@@ -88,6 +89,88 @@ def get_thresholds_for_pw(data, pw_key):
 
 
 # ---------------------------------------------------------------------------
+# Electric field loading (subsampled for visualisation)
+# ---------------------------------------------------------------------------
+
+def load_electrode_field(path, subsample=4, electrode_center=None):
+    """Load a COMSOL electrode export and return subsampled 3D field data.
+
+    Parameters
+    ----------
+    path : str
+        Path to the electrode .txt file (COMSOL export: x y z V).
+    subsample : int
+        Keep every Nth unique coordinate along each axis to reduce data volume.
+    electrode_center : tuple or None
+        (cx, cy, cz) — if provided, the FEM grid is re-centered so its
+        midpoint sits at these coordinates (same logic as dti_ann_LUT.py).
+
+    Returns
+    -------
+    X, Y, Z : 3-D ndarrays (meshgrid)
+    V : 3-D ndarray of electric potential (mV, absolute value, log-scaled)
+    """
+    print(f"Loading electrode field: {path} ...")
+    t0 = time.time()
+
+    x_coords, y_coords, z_coords, potentials = [], [], [], []
+    x_prev = y_prev = z_prev = None
+
+    with open(path) as f:
+        for line in f:
+            if line.startswith("%"):
+                continue
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            xv = round(float(parts[0]), 3)
+            yv = round(float(parts[1]), 3)
+            zv = round(float(parts[2]), 3)
+            vv = float(parts[3])
+            potentials.append(vv)
+            if xv != x_prev and xv not in x_coords:
+                x_coords.append(xv)
+            if yv != y_prev and yv not in y_coords:
+                y_coords.append(yv)
+            if zv != z_prev and zv not in z_coords:
+                z_coords.append(zv)
+            x_prev, y_prev, z_prev = xv, yv, zv
+
+    nx, ny, nz = len(x_coords), len(y_coords), len(z_coords)
+    print(f"  Grid: {nx} x {ny} x {nz} = {nx*ny*nz:,} points")
+
+    # Reshape — data is stored z-outer, y-middle, x-inner (like FEM.py)
+    V_full = np.array(potentials, dtype=np.float64).reshape((nz, ny, nx))
+    V_full = np.transpose(V_full, (2, 1, 0))  # -> (nx, ny, nz)
+
+    x_arr = np.array(x_coords)
+    y_arr = np.array(y_coords)
+    z_arr = np.array(z_coords)
+
+    # Subsample
+    xs = x_arr[::subsample]
+    ys = y_arr[::subsample]
+    zs = z_arr[::subsample]
+    Vs = V_full[::subsample, ::subsample, ::subsample]
+
+    # Apply centering offset (same as dti_ann_LUT.py)
+    if electrode_center is not None:
+        orig_cx = (x_arr[0] + x_arr[-1]) / 2.0
+        orig_cy = (y_arr[0] + y_arr[-1]) / 2.0
+        orig_cz = (z_arr[0] + z_arr[-1]) / 2.0
+        xs = xs + (electrode_center[0] - orig_cx)
+        ys = ys + (electrode_center[1] - orig_cy)
+        zs = zs + (electrode_center[2] - orig_cz)
+
+    X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
+
+    print(f"  Subsampled to {len(xs)} x {len(ys)} x {len(zs)} = {Vs.size:,} points "
+          f"in {time.time() - t0:.1f}s")
+
+    return X, Y, Z, Vs
+
+
+# ---------------------------------------------------------------------------
 # Batched trace building (the performance trick)
 # ---------------------------------------------------------------------------
 
@@ -149,152 +232,94 @@ def contact_label(index, polarity):
 
 
 # ---------------------------------------------------------------------------
-# Electrode rendering (detailed 3D mesh)
+# Electric field rendering
 # ---------------------------------------------------------------------------
 
-def plot_electrode(fig, leftLeadPos, config=None, max_fiber_z=None):
-    """Add a detailed 3D mesh electrode visualisation to the Plotly figure.
+def add_electric_field(fig, X, Y, Z, V):
+    """Add continuous volumetric electric-field rendering to the figure.
 
-    Parameters
-    ----------
-    leftLeadPos : list of lists
-        [[x0, x1], [y0, y1], [z0, z1]] defining the lead axis.
-    config : dict or None
-        Mapping {0: '+'/'-'/None, ...} from parse_electrode_config().
-        If None, all contacts drawn as inactive grey.
-    max_fiber_z : float or None
-        If provided, cap the lead shaft so it doesn't extend above this z.
+    A symmetric-log (symlog) transform compresses the huge dynamic range
+    while preserving sign.  The result is mapped to a diverging colour
+    scale (red = negative / cathode, blue = positive / anode) with
+    opacity that fades smoothly to fully transparent near zero.
     """
-    if config is None:
-        config = {0: None, 1: None, 2: None, 3: None}
+    Vc = V.copy()
+    Vc[np.isnan(Vc)] = 0.0
 
-    lead_color = '#A6A6A6'
+    # --- symmetric log transform ---
+    # linthresh sets the "floor": values below this become transparent.
+    # Above linthresh the scale is logarithmic to compress the huge range.
+    linthresh = 1e-6  # V
+    sign = np.sign(Vc)
+    mag  = np.abs(Vc)
+    mag_safe = np.maximum(mag, linthresh)  # avoid log10(0)
+    slog = np.where(
+        mag <= linthresh,
+        Vc / linthresh,
+        sign * (1.0 + np.log10(mag_safe / linthresh)),
+    )
 
-    scale = 3.0
-    radius = (1.27 / 2) * scale
-    step = np.pi / 32
-    contact_height = 1.5 * scale
+    # Normalise to [-1, 1]
+    absmax = np.max(np.abs(slog))
+    if absmax > 0:
+        slog /= absmax
 
-    x_temp = leftLeadPos[0]
-    y_temp = leftLeadPos[1]
-    z_temp = leftLeadPos[2]
+    # Compute actual voltage extremes for colorbar tick labels
+    vmin = float(np.nanmin(Vc))
+    vmax = float(np.nanmax(Vc))
 
-    # Build rotation matrix from lead axis
-    x_trans = np.subtract(x_temp, x_temp[0])
-    y_trans = np.subtract(y_temp, y_temp[0])
-    z_trans = np.subtract(z_temp, z_temp[0])
+    # Fraction of the normalised range that corresponds to the transparent
+    # "dead zone" around zero.  Values whose |slog| is below this fraction
+    # will be invisible; above it, opacity ramps up.
+    dead = 0.15  # ~first-decade of the log range -> transparent
 
-    vectorz = [x_trans[1], y_trans[1], z_trans[1]]
-    uvz = vectorz / np.linalg.norm(vectorz)
-    uvx = np.cross(uvz, [0, 1, 0])
-    if np.linalg.norm(uvx) == 0:
-        uvx = np.array([1.0, 0.0, 0.0])
-    else:
-        uvx = uvx / np.linalg.norm(uvx)
-    uvy = np.cross(uvz, uvx)
-
-    rotation_matrix = np.array([
-        [uvx[0], uvx[1], uvx[2], 0],
-        [uvy[0], uvy[1], uvy[2], 0],
-        [uvz[0], uvz[1], uvz[2], 0],
-        [0.0, 0.0, 0.0, 1.0],
-    ])
-
-    def create_cylinder_mesh(height, position, color, is_tip=False):
-        """Create a cylinder mesh segment and add as a Mesh3d trace."""
-        if is_tip:
-            phi, theta = np.meshgrid(
-                np.arange(np.pi / 2, np.pi + step, step),
-                np.arange(0, 2 * np.pi + step, step),
-            )
-        else:
-            height_step = np.arctan2(height, radius)
-            phi, theta = np.meshgrid(
-                np.arange(np.pi / 2, np.pi / 2 + height_step + height_step, height_step),
-                np.arange(0, 2 * np.pi + step, step),
-            )
-
-        x = np.sin(phi) * np.cos(theta) * radius
-        y = np.sin(phi) * np.sin(theta) * radius
-        z = np.cos(phi) * radius
-
-        if not is_tip:
-            mult = 1.0 / np.cos(height_step)
-            x[:, 1] *= mult
-            y[:, 1] *= mult
-            z[:, 1] *= mult
-
-        z = np.add(z, height + position)
-
-        # Rotate and translate into world coordinates
-        x_rot = np.empty_like(x)
-        y_rot = np.empty_like(y)
-        z_rot = np.empty_like(z)
-        for i, j in np.ndindex(x.shape):
-            pt = np.array([x[i, j], y[i, j], z[i, j], 1.0])
-            rp = rotation_matrix.dot(pt)
-            x_rot[i, j] = rp[0] + x_temp[0]
-            y_rot[i, j] = rp[1] + y_temp[0]
-            z_rot[i, j] = rp[2] + z_temp[0]
-
-        # Build triangle faces
-        verts = np.column_stack((x_rot.flatten(), y_rot.flatten(), z_rot.flatten()))
-        tri_i, tri_j, tri_k = [], [], []
-        nrows, ncols = x_rot.shape
-        for r in range(nrows - 1):
-            for c in range(ncols - 1):
-                base = r * ncols + c
-                tri_i.extend([base, base + 1])
-                tri_j.extend([base + 1, base + ncols + 1])
-                tri_k.extend([base + ncols, base + ncols])
-
-        fig.add_trace(go.Mesh3d(
-            x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
-            i=tri_i, j=tri_j, k=tri_k,
-            color=color, opacity=1.0,
-            name='Electrode', showlegend=False,
-        ))
-
-    # Rounded tip
-    tip_height = contact_height - radius
-    create_cylinder_mesh(tip_height, -1 * tip_height, lead_color, is_tip=True)
-    create_cylinder_mesh(tip_height, -1 * tip_height, lead_color)
-
-    # 4 contacts + 3 gaps = 7 segments (tip → shaft)
-    # Contact 0 is at the tip (distal), Contact 3 is nearest the shaft (proximal)
-    positions = [contact_height * i for i in range(7)]
-    colors = [
-        contact_color(config.get(0)),  # Contact 0 (tip / distal)
-        lead_color,                    # Gap
-        contact_color(config.get(1)),  # Contact 1
-        lead_color,                    # Gap
-        contact_color(config.get(2)),  # Contact 2
-        lead_color,                    # Gap
-        contact_color(config.get(3)),  # Contact 3 (shaft / proximal)
-    ]
-    for pos, col in zip(positions, colors):
-        create_cylinder_mesh(contact_height, pos, col)
-
-    # Shaft beyond the contacts
-    shaft_pos = positions[-1] + contact_height
-    default_shaft = 100.0 * scale
-    shaft_length = default_shaft
-    if max_fiber_z is not None:
-        uvz_vec = np.array([rotation_matrix[2, 0], rotation_matrix[2, 1], rotation_matrix[2, 2]])
-        uvz_z = uvz_vec[2]
-        if uvz_z > 1e-6:
-            max_allowed = (max_fiber_z - z_temp[0]) / uvz_z - shaft_pos
-            shaft_length = max(0.0, min(default_shaft, max_allowed - 0.1 * scale))
-    create_cylinder_mesh(max(0.0, shaft_length), shaft_pos, lead_color)
+    fig.add_trace(go.Volume(
+        x=X.flatten(),
+        y=Y.flatten(),
+        z=Z.flatten(),
+        value=slog.flatten(),
+        customdata=Vc.flatten(),
+        hovertemplate=(
+            "x: %{x:.1f}<br>"
+            "y: %{y:.1f}<br>"
+            "z: %{z:.1f}<br>"
+            "V: %{customdata:.4g} V"
+            "<extra>Electric Field</extra>"
+        ),
+        isomin=-1.0,
+        isomax=1.0,
+        opacity=0.5,
+        surface_count=50,
+        colorscale='RdBu',
+        opacityscale=[
+            [0.0,          1.0],   # strong negative -> opaque
+            [0.5 - dead,   0.08],
+            [0.5,          0.0],   # zero -> fully transparent
+            [0.5 + dead,   0.08],
+            [1.0,          1.0],   # strong positive -> opaque
+        ],
+        caps=dict(x_show=False, y_show=False, z_show=False),
+        showscale=True,
+        colorbar=dict(
+            title="V", x=1.02, len=0.6,
+            tickvals=[-1, 0, 1],
+            ticktext=[f"{vmin:.3g}", "0", f"{vmax:.3g}"],
+        ),
+        name="Electric Field",
+        visible=True,
+        legendgroup="efield",
+        showlegend=True,
+    ))
 
 
 # ---------------------------------------------------------------------------
 # Scene rendering
 # ---------------------------------------------------------------------------
 
-def render(fibers, thresholds, voltage, electrode_center, title="", show_axes=False, electrode_config=None):
-    """Build a Plotly figure with activated (red) and inactive (grey) fibers."""
-    fig = make_subplots(rows=1, cols=1, specs=[[{"type": "scene"}]])
+def render(fibers, thresholds, voltage, electrode_center, title="",
+           show_axes=False, electrode_config=None, field_data=None):
+    """Build a Plotly figure with activated/inactive fibers and optional E-field."""
+    fig = go.Figure()
 
     active, inactive = [], []
     for i in range(len(fibers)):
@@ -314,6 +339,7 @@ def render(fibers, thresholds, voltage, electrode_center, title="", show_axes=Fa
             x=ax, y=ay, z=az, mode="lines",
             line=dict(color="red", width=2), opacity=1.0,
             name="Activated", connectgaps=False,
+            legendgroup="activated", showlegend=True,
         ))
 
     ix, iy, iz = build_merged_trace(fibers, inactive)
@@ -322,29 +348,42 @@ def render(fibers, thresholds, voltage, electrode_center, title="", show_axes=Fa
             x=ix, y=iy, z=iz, mode="lines",
             line=dict(color="black", width=1), opacity=0.15,
             name="Inactive", connectgaps=False,
+            legendgroup="inactive", showlegend=True,
+            visible="legendonly",  # inactive fibers hidden by default
         ))
 
-    # Compute max fiber Z so we can cap the lead shaft height
-    max_fiber_z = None
-    if fibers:
-        try:
-            max_fiber_z = max(f[:, 2].max() for f in fibers)
-        except Exception:
-            pass
+    # Electric field (replaces lead mesh)
+    if field_data is not None:
+        X, Y, Z, V = field_data
+        add_electric_field(fig, X, Y, Z, V)
 
-    # Build leftLeadPos from electrode center: two-point axis along Z
-    cx, cy, cz = electrode_center
-    leftLeadPos = [[cx, cx], [cy, cy], [cz - 5, cz + 5]]
-    plot_electrode(fig, leftLeadPos, config=electrode_config, max_fiber_z=max_fiber_z)
+    # Axes toggle visibility
+    show = show_axes
+    axis_style = dict(
+        visible=True,
+        showticklabels=show,
+        showgrid=show,
+        zeroline=show,
+        title="" if not show else None,
+    )
+    hide = dict(visible=False, showticklabels=False, showgrid=False, zeroline=False)
 
-    scene = dict(camera=dict(eye=dict(x=1.5, y=1.5, z=1.5)), aspectmode="data")
-    if not show_axes:
-        hide = dict(visible=False, showticklabels=False, showgrid=False, zeroline=False)
-        scene.update(xaxis=hide, yaxis=hide, zaxis=hide)
+    scene = dict(
+        camera=dict(eye=dict(x=1.5, y=1.5, z=1.5)),
+        aspectmode="data",
+        xaxis=axis_style if show else hide,
+        yaxis=axis_style if show else hide,
+        zaxis=axis_style if show else hide,
+    )
 
     fig.update_layout(
         title=dict(text=title, x=0.5, xanchor="center"),
-        scene=scene, showlegend=True,
+        scene=scene,
+        showlegend=True,
+        legend=dict(
+            itemsizing="constant",
+            title="Click to toggle",
+        ),
         margin=dict(l=0, r=0, t=30, b=0),
     )
     return fig, len(active)
@@ -411,12 +450,32 @@ Examples
         help="Electrode contact configuration string, e.g. '01-23', '+012-3', '-0+1-2+3'. "
              "'-' marks cathodes (red), '+' marks anodes (blue), unmarked contacts are grey.",
     )
+    parser.add_argument(
+        "--electrode", type=str, default=None, metavar="FILE",
+        help="Path to the electrode FEM export file (.txt, COMSOL format). "
+             "When provided, an electric-field isosurface is shown instead of a "
+             "lead mesh.  Toggle it on/off in the legend.",
+    )
+    parser.add_argument(
+        "--field_subsample", type=int, default=4, metavar="N",
+        help="Subsample the electrode grid by keeping every Nth point per axis. "
+             "Default: 4.  Increase to reduce memory / rendering time.",
+    )
 
     args = parser.parse_args()
     mkdirp(args.output)
 
     electrode_center = tuple(args.electrode_center) if args.electrode_center else (0, 0, 0)
     electrode_config = parse_electrode_config(args.electrode_config) if args.electrode_config else None
+
+    # Load electric field if an electrode file was provided
+    field_data = None
+    if args.electrode:
+        field_data = load_electrode_field(
+            args.electrode,
+            subsample=args.field_subsample,
+            electrode_center=electrode_center,
+        )
 
     # 1. Load results JSON - auto-detect pulse widths
     print(f"Loading results: {args.results}")
@@ -456,6 +515,7 @@ Examples
             fibers, thresholds, args.activation_threshold,
             electrode_center, title, args.show_axes,
             electrode_config=electrode_config,
+            field_data=field_data,
         )
 
         out_html = os.path.join(args.output, f"activation_pw_{idx:02d}_{pw_us:.0f}us.html")

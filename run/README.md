@@ -31,18 +31,35 @@ When you provide explicit X, Y, Z coordinates, the script:
 
 This lets you use the same electrode FEM file with any tractography file, regardless of the coordinate system the tracts were generated in.
 
+### Windows / PowerShell Note
+
+PowerShell does not support `\` for line continuation. Replace `\` with a backtick `` ` `` at the end of each line, or run the command on a single line. Example:
+
+```powershell
+python run/dti_ann_LUT.py `
+    "electrodes\directed\monopolar\bsc_directional_anisotropic_monopolar_01(a,b,c)2(-a,b,c)3.txt" `
+    example_tracks\L_DRTT_voxel.txt `
+    models\ann_17_class output ssd dti 167 223 147 class
+```
+
+Also, if the electrode filename contains parentheses, wrap the path in quotes — PowerShell treats bare parentheses as syntax:
+
+```powershell
+python run/dti_ann_LUT.py "electrodes\directed\monopolar\bsc_directional_anisotropic_monopolar_01(a,b,c)2(-a,b,c)3.txt" ...
+```
+
 ### Examples
 
-**Custom electrode placement** (recommended for arbitrary tract files):
+**Example using the included example tracks** (electrode center `167 223 147` matches the `example_tracks/` coordinate space):
 ```bash
 python run/dti_ann_LUT.py \
-    electrodes/medtronic_3387/monopolar/3387_anisotropic_monopolar_01-23.txt \
-    example_tracks/whole_brain.txt \
-    models/ann_19_reg \
+    "electrodes/directed/monopolar/bsc_directional_anisotropic_monopolar_01(a,b,c)2(-a,b,c)3.txt" \
+    example_tracks/L_DRTT_voxel.txt \
+    models/ann_17_class \
     run/results.json \
-    ssd dti 38 50 30 reg
+    ssd dti 167 223 147 class
 ```
-This places the electrode center at coordinates (38, 50, 30) in the fiber's
+This places the electrode center at coordinates (167, 223, 147) in the fiber's
 coordinate space.
 
 **Legacy conductivity mode** (for files already aligned with the FEM grid):
