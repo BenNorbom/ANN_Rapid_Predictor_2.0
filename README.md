@@ -10,7 +10,25 @@ Computational models are powerful tools that can enable the optimization of deep
    cd ANN_Rapid_Predictor_2.0
    ```
 
-2. Create a Python 3.10 virtual environment and install dependencies:
+2. Pull example tracks:
+   To run the quick start examples, you'll need the tract files. You can pull just these files (~246 KB) without downloading the entire large file history:
+   ```bash
+   git lfs pull -I "example_tracks/**"
+   ```
+
+3. **(Important)** Pull large model and electrode files:
+   This repository uses Git LFS for large files. Run the following command to download all remaining necessary files (approx. 669 MB):
+   ```bash
+   git lfs pull
+   ```
+
+   **Selective Download:**
+   If you only need specific electrode files (to save bandwidth/disk space), you can pull them individually using the `-I` (include) flag. For example:
+   ```bash
+   git lfs pull -I "electrodes/directed/monopolar/bsc_directional_anisotropic_monopolar_01(a,b,c)2(-a,b,c)3.txt"
+   ```
+
+4. Create a Python 3.10 virtual environment and install dependencies:
    ```bash
    python -m venv .venv
    .venv\Scripts\activate      # Windows
