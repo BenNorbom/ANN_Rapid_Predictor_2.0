@@ -43,9 +43,12 @@ python graphing/plot_tracts_fast.py --tract <TRACT_FILE> --results <RESULTS_JSON
 
 When `--electrode` is provided, the script loads the COMSOL FEM export file
 (columns: `x y z V`), sub-samples it by `--field_subsample`, and renders a
-**Plotly Isosurface** with a log-scaled voltage colour map ('Hot' scale).
-The field appears continuous with 8 iso-levels and 30% opacity. Toggle
-**Electric Field** on/off from the plot legend.
+**Plotly Volume** trace with a symmetric-log (symlog) voltage colour map
+(`RdBu` scale: blue = positive/anode, red = negative/cathode).
+The symlog transform compresses the large dynamic range of the field so both
+strong and weak regions are visible simultaneously; values near zero are
+rendered transparent. Hovering over the volume shows the actual voltage in V.
+Toggle **Electric Field** on/off from the plot legend.
 
 ### Toggleable Legend Groups
 
