@@ -29,14 +29,22 @@ Computational models are powerful tools that can enable the optimization of deep
    ```
 
 4. Create a Python 3.10 virtual environment and install dependencies:
+
+   > **Important:** Python 3.10 is required. TensorFlow 2.15 does not support Python 3.11 or newer. If you have multiple Python versions installed, use the `py -3.10` launcher (Windows) or `python3.10` (Linux/Mac) to target the correct version.
+
+   **Windows:**
    ```bash
-   python -m venv .venv
-   .venv\Scripts\activate      # Windows
-   # source .venv/bin/activate  # Linux/Mac
+   py -3.10 -m venv .venv
+   .venv\Scripts\activate
    pip install -r requirements.txt
    ```
 
-> **Note:** Python 3.10 is required for TensorFlow 2.15 compatibility.
+   **Linux/Mac:**
+   ```bash
+   python3.10 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
 
 ## Quick Start
 
@@ -57,45 +65,24 @@ See [run/README.md](run/README.md) for detailed argument descriptions.
 
 ```bash
 python graphing/plot_tracts_fast.py \
-    --tract example_tracks/whole_brain.txt \
+    --tract example_tracks/L_DRTT_voxel.txt \
+    --results run/results.json \
+    --output output_viz/
+```
+
+To overlay the electric potential field, add `--electrode` and `--electrode_center`:
+
+```bash
+python graphing/plot_tracts_fast.py \
+    --tract example_tracks/L_DRTT_voxel.txt \
     --results run/results.json \
     --output output_viz/ \
-    --activation_threshold 3.0 \
-    --electrode_center 38 50 30 \
-    --electrode_config 01-23 \
-    --downsample 3
+    --electrode "electrodes/medtronic_3387/monopolar/3387_anisotropic_monopolar_01-23.txt" \
+    --electrode_center 167 223 147 \
+    --field_subsample 4
 ```
 
 See [graphing/README.md](graphing/README.md) for all visualization options.
-
-### 3. Bundle-aware visualization (optional)
-
-If you have specific tract bundles (e.g. DRTT, ML, PRT) alongside a whole-brain
-file, you can merge them and visualize each bundle in a distinct colour:
-
-```bash
-# Merge whole-brain tracts with named bundles
-python move_whole_brain_tracts.py \
-    --source example_tracks/whole_brain.txt \
-    --center 38 50 30 \
-    --bundles L_DRTT_voxel.txt L_ML_voxel.txt L_PRT_voxel.txt \
-    --output merged_tracts.txt
-
-# Run prediction on the merged file
-python run/dti_ann_LUT.py \
-    electrodes/medtronic_3387/monopolar/3387_anisotropic_monopolar_01-23.txt \
-    merged_tracts.txt models/ann_19_reg run/results.json \
-    ssd dti 38 50 30 reg
-
-# Visualize with bundle colouring
-python graphing/plot_tracts_bundles.py \
-    --tract merged_tracts.txt \
-    --results run/results.json \
-    --manifest merged_tracts_manifest.json \
-    --output output_viz_whole_brain/ \
-    --electrode_center 38 50 30 \
-    --electrode_config 01-23
-```
 
 ## Project Structure
 
@@ -105,8 +92,7 @@ ANN_Rapid_Predictor_2.0/
 ├── example_tracks/      # Example tractography files
 ├── graphing/            # Visualization scripts
 │   ├── plot_tracts_fast.py      # Fast 3D visualization (100k+ fibers)
-│   ├── plot_tracts.py           # Original visualization with per-fiber rendering
-│   └── plot_tracts_bundles.py   # Bundle-aware colour-coded visualization
+│   └── plot_tracts.py           # Per-fiber rendering with interactive pulse-width plots
 ├── models/              # Pre-trained ANN models
 ├── run/                 # Prediction scripts
 │   ├── dti_ann_LUT.py           # Main ANN prediction script
