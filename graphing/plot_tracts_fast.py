@@ -296,7 +296,7 @@ def add_electric_field(fig, X, Y, Z, V):
             [1.0,        0.0],
         ]
         cb_tickvals = [-1, 0]
-        cb_ticktext = [f"{vmin:.3g}", "0"]
+        cb_ticktext = ["-max", "0"]
     elif only_positive:
         # Blue-only scale for purely positive (anode) fields
         iso_min, iso_max = 0.0, 1.0
@@ -314,7 +314,7 @@ def add_electric_field(fig, X, Y, Z, V):
             [1.0,   1.0],
         ]
         cb_tickvals = [0, 1]
-        cb_ticktext = ["0", f"{vmax:.3g}"]
+        cb_ticktext = ["0", "+max"]
     else:
         # Diverging red-blue for mixed polarity fields
         iso_min, iso_max = -1.0, 1.0
@@ -329,7 +329,7 @@ def add_electric_field(fig, X, Y, Z, V):
             [1.0,        1.0],
         ]
         cb_tickvals = [-1, 0, 1]
-        cb_ticktext = [f"{vmin:.3g}", "0", f"{vmax:.3g}"]
+        cb_ticktext = ["-max", "0", "+max"]
 
     fig.add_trace(go.Volume(
         x=X.flatten(),
@@ -353,7 +353,7 @@ def add_electric_field(fig, X, Y, Z, V):
         caps=dict(x_show=False, y_show=False, z_show=False),
         showscale=True,
         colorbar=dict(
-            title="V", x=0.02, len=0.6,
+            title="E-field", x=0.02, len=0.6,
             tickvals=cb_tickvals,
             ticktext=cb_ticktext,
         ),

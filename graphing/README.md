@@ -373,8 +373,9 @@ marching-cubes isosurfacing on the client side in WebGL. Key parameters:
 - **`caps`** — Disabled on all three axes to avoid opaque bounding-box faces.
 - **`customdata`** — The raw (untransformed) voltage values are attached so
   the hover tooltip shows the actual voltage in V, not the symlog value.
-- **`colorbar`** — Positioned at `x=0.02` (left side) to avoid overlapping
-  with the fiber legend on the right.
+- **`colorbar`** — Positioned at `x=0.02` (left side). Labels use symbolic
+  notation: **-max** (dark red, cathode), **0** (centre), and **+max**
+  (dark blue, anode) instead of raw numeric values.
 
 ### Toggle Button
 
