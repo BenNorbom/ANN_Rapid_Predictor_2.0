@@ -519,7 +519,23 @@ def render(fibers, threshold_map, voltage, electrode_center, bundle_ranges,
             )]
         )
 
-    return fig, total_active
+    # Build per-bundle activation detail (0-based indices within each bundle)
+    bundle_detail = {}
+    for bname, binfo in bundle_ranges.items():
+        display_name = bname.removeprefix("L_").removesuffix("_voxel")
+        start = binfo["start"]
+        bundle_detail[display_name] = {
+            "activated": len(bundle_active[bname]),
+            "total": binfo["end"] - start,
+            "activated_indices": sorted(i - start for i in bundle_active[bname]),
+        }
+    bundle_detail["whole_brain"] = {
+        "activated": len(wb_active),
+        "total": len(wb_active) + len(wb_inactive),
+        "activated_indices": sorted(wb_active),
+    }
+
+    return fig, total_active, bundle_detail
 
 
 # ---------------------------------------------------------------------------
@@ -648,7 +664,7 @@ Examples
         print(f"\nPlotting PW {pw_us:.0f} us  ({idx + 1}/{len(pw_keys)}) ...")
 
         thresholds = get_thresholds_for_pw(data, pw)
-        fig, n_active = render(
+        fig, n_active, bundle_detail = render(
             fibers, thresholds, args.activation_threshold,
             electrode_center, bundle_ranges,
             title, args.show_axes, electrode_config=electrode_config,
@@ -660,15 +676,20 @@ Examples
         out_html = os.path.join(args.output, f"activation_pw_{idx:02d}_{pw_us:.0f}us.html")
         fig.write_html(out_html)
         print(f"  Saved {out_html}")
-        summary[f"{pw_us:.0f}"] = n_active
+        summary[f"{pw_us:.0f}"] = {
+            "total_activated": n_active,
+            "bundles": bundle_detail,
+        }
 
     # 6. Summary
     summary_path = os.path.join(args.output, "activation_summary.json")
+    summary_doc = {
+        "activation_threshold_V": args.activation_threshold,
+        "manifest": os.path.abspath(args.manifest),
+        "activated_counts": summary,
+    }
     with open(summary_path, "w") as f:
-        json.dump(
-            {"activation_threshold_V": args.activation_threshold, "activated_counts": summary},
-            f, indent=2,
-        )
+        json.dump(summary_doc, f, indent=2)
     print(f"\nDone. Summary -> {summary_path}")
 
 
