@@ -174,11 +174,17 @@ def load_electrode_field(path, subsample=4, electrode_center=None):
 # Batched trace building (the performance trick)
 # ---------------------------------------------------------------------------
 
-def build_merged_trace(fibers, indices):
-    """Merge many fibers into one (x, y, z) tuple with NaN separators."""
+def build_merged_trace(fibers, indices, pts_stride=1):
+    """Merge many fibers into one (x, y, z) tuple with NaN separators.
+
+    Parameters
+    ----------
+    pts_stride : int
+        Keep every Nth point per fiber (1 = full resolution).
+    """
     if not indices:
         return None, None, None
-    selected = [fibers[i] for i in indices]
+    selected = [fibers[i][::pts_stride] for i in indices]
     total = sum(f.shape[0] for f in selected) + len(selected)
     merged = np.full((total, 3), np.nan, dtype=np.float32)
     cur = 0
@@ -264,14 +270,66 @@ def add_electric_field(fig, X, Y, Z, V):
     if absmax > 0:
         slog /= absmax
 
-    # Compute actual voltage extremes for colorbar tick labels
     vmin = float(np.nanmin(Vc))
     vmax = float(np.nanmax(Vc))
 
-    # Fraction of the normalised range that corresponds to the transparent
-    # "dead zone" around zero.  Values whose |slog| is below this fraction
-    # will be invisible; above it, opacity ramps up.
-    dead = 0.15  # ~first-decade of the log range -> transparent
+    dead = 0.30
+
+    # Adapt colour-scale and opacity to field polarity
+    only_negative = vmax <= 0
+    only_positive = vmin >= 0
+
+    if only_negative:
+        # Red-only scale for purely negative (cathode) fields
+        iso_min, iso_max = -1.0, 0.0
+        cscale = [
+            [0.0,  'rgb(103,0,31)'],
+            [0.25, 'rgb(178,24,43)'],
+            [0.5,  'rgb(214,96,77)'],
+            [0.75, 'rgb(244,165,130)'],
+            [1.0,  'rgb(253,219,199)'],
+        ]
+        oscale = [
+            [0.0,        1.0],
+            [0.45,       0.20],
+            [1.0 - dead, 0.02],
+            [1.0,        0.0],
+        ]
+        cb_tickvals = [-1, 0]
+        cb_ticktext = [f"{vmin:.3g}", "0"]
+    elif only_positive:
+        # Blue-only scale for purely positive (anode) fields
+        iso_min, iso_max = 0.0, 1.0
+        cscale = [
+            [0.0,  'rgb(209,229,240)'],
+            [0.25, 'rgb(146,197,222)'],
+            [0.5,  'rgb(67,147,195)'],
+            [0.75, 'rgb(33,102,172)'],
+            [1.0,  'rgb(5,48,97)'],
+        ]
+        oscale = [
+            [0.0,   0.0],
+            [dead,  0.02],
+            [0.55,  0.20],
+            [1.0,   1.0],
+        ]
+        cb_tickvals = [0, 1]
+        cb_ticktext = ["0", f"{vmax:.3g}"]
+    else:
+        # Diverging red-blue for mixed polarity fields
+        iso_min, iso_max = -1.0, 1.0
+        cscale = 'RdBu'
+        oscale = [
+            [0.0,        1.0],
+            [0.25,       0.20],
+            [0.5 - dead, 0.02],
+            [0.5,        0.0],
+            [0.5 + dead, 0.02],
+            [0.75,       0.20],
+            [1.0,        1.0],
+        ]
+        cb_tickvals = [-1, 0, 1]
+        cb_ticktext = [f"{vmin:.3g}", "0", f"{vmax:.3g}"]
 
     fig.add_trace(go.Volume(
         x=X.flatten(),
@@ -286,24 +344,18 @@ def add_electric_field(fig, X, Y, Z, V):
             "V: %{customdata:.4g} V"
             "<extra>Electric Field</extra>"
         ),
-        isomin=-1.0,
-        isomax=1.0,
+        isomin=iso_min,
+        isomax=iso_max,
         opacity=0.5,
         surface_count=50,
-        colorscale='RdBu',
-        opacityscale=[
-            [0.0,          1.0],   # strong negative -> opaque
-            [0.5 - dead,   0.08],
-            [0.5,          0.0],   # zero -> fully transparent
-            [0.5 + dead,   0.08],
-            [1.0,          1.0],   # strong positive -> opaque
-        ],
+        colorscale=cscale,
+        opacityscale=oscale,
         caps=dict(x_show=False, y_show=False, z_show=False),
         showscale=True,
         colorbar=dict(
-            title="V", x=1.02, len=0.6,
-            tickvals=[-1, 0, 1],
-            ticktext=[f"{vmin:.3g}", "0", f"{vmax:.3g}"],
+            title="V", x=0.02, len=0.6,
+            tickvals=cb_tickvals,
+            ticktext=cb_ticktext,
         ),
         name="Electric Field",
         visible=True,
@@ -317,7 +369,8 @@ def add_electric_field(fig, X, Y, Z, V):
 # ---------------------------------------------------------------------------
 
 def render(fibers, thresholds, voltage, electrode_center, title="",
-           show_axes=False, electrode_config=None, field_data=None):
+           show_axes=False, electrode_config=None, field_data=None,
+           max_simplify=3):
     """Build a Plotly figure with activated/inactive fibers and optional E-field."""
     fig = go.Figure()
 
@@ -333,7 +386,11 @@ def render(fibers, thresholds, voltage, electrode_center, title="",
 
     print(f"  Activated: {len(active)},  Inactive: {len(inactive)}")
 
-    ax, ay, az = build_merged_trace(fibers, active)
+    stride = max(1, max_simplify)
+    if stride > 1:
+        print(f"  Simplifying fibers: keeping every {stride}th point")
+
+    ax, ay, az = build_merged_trace(fibers, active, pts_stride=stride)
     if ax is not None:
         fig.add_trace(go.Scatter3d(
             x=ax, y=ay, z=az, mode="lines",
@@ -342,7 +399,7 @@ def render(fibers, thresholds, voltage, electrode_center, title="",
             legendgroup="activated", showlegend=True,
         ))
 
-    ix, iy, iz = build_merged_trace(fibers, inactive)
+    ix, iy, iz = build_merged_trace(fibers, inactive, pts_stride=stride)
     if ix is not None:
         fig.add_trace(go.Scatter3d(
             x=ix, y=iy, z=iz, mode="lines",
@@ -384,8 +441,27 @@ def render(fibers, thresholds, voltage, electrode_center, title="",
             itemsizing="constant",
             title="Click to toggle",
         ),
-        margin=dict(l=0, r=0, t=30, b=0),
+        margin=dict(l=60, r=0, t=30, b=0),
     )
+
+    # Add E-field toggle button
+    if field_data is not None:
+        ef_idx = len(fig.data) - 1
+        fig.update_layout(
+            updatemenus=[dict(
+                type="buttons",
+                buttons=[dict(
+                    label="Toggle Electric Field",
+                    method="restyle",
+                    args=[{"visible": [False]}, [ef_idx]],
+                    args2=[{"visible": [True]}, [ef_idx]],
+                )],
+                showactive=True,
+                x=0.0, xanchor="left",
+                y=1.05, yanchor="top",
+            )]
+        )
+
     return fig, len(active)
 
 
@@ -435,6 +511,11 @@ Examples
     parser.add_argument(
         "--downsample", type=int, default=1, metavar="N",
         help="Keep every Nth point per fiber to speed up rendering.  Default: 1 (no downsampling).",
+    )
+    parser.add_argument(
+        "--simplify", type=int, default=3, metavar="N",
+        help="Keep every Nth point per fiber to reduce rendering load. "
+             "Default: 3. Set to 1 for full resolution.",
     )
     parser.add_argument(
         "--show_axes", action="store_true",
@@ -516,6 +597,7 @@ Examples
             electrode_center, title, args.show_axes,
             electrode_config=electrode_config,
             field_data=field_data,
+            max_simplify=args.simplify,
         )
 
         out_html = os.path.join(args.output, f"activation_pw_{idx:02d}_{pw_us:.0f}us.html")

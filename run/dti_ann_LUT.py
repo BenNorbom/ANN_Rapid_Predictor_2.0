@@ -35,6 +35,19 @@ except ImportError:
             self.value = val
 
 
+def print_progress(current, total, prefix='', bar_length=40):
+    """Print a simple progress bar to the terminal."""
+    fraction = current / total if total > 0 else 1.0
+    filled = int(bar_length * fraction)
+    bar = '\u2588' * filled + '\u2591' * (bar_length - filled)
+    percent = fraction * 100
+    sys.stdout.write(f'\r{prefix} |{bar}| {percent:5.1f}% ({current}/{total})')
+    sys.stdout.flush()
+    if current >= total:
+        sys.stdout.write('\n')
+        sys.stdout.flush()
+
+
 # COMMAND LINE INPUTS: 
 electrode1File = sys.argv[1]
 tractFile = sys.argv[2]
@@ -72,8 +85,12 @@ EXP_EXTRAPOLATE = True
 pulse_widths = [60, 75, 90, 105, 120, 135, 150, 175, 200, 225, 250, 275, 300, 350, 400, 450, 500]
 node_to_node = 0.5
 
+print("Loading FEM grid...")
+fem_load_start = time.time()
 fem = FEM.FEMgrid(electrode1File)
 grid_e1 = fem.get3dGrid()
+fem_load_time = time.time() - fem_load_start
+print(f"FEM grid loaded in {fem_load_time:.2f}s")
 fem_bounds_original = fem.getFEMBounds()
 
 # When custom_center is provided, the 3 coordinates specify the CENTER
@@ -113,6 +130,8 @@ if custom_center is not None:
 else:
     fem_bounds = fem_bounds_original
 
+print("Processing DTI tracts...")
+dti_start = time.time()
 test_dti = process_DTI.DTI_tracts(
     tractFile, 
     fem_bounds, 
@@ -121,7 +140,14 @@ test_dti = process_DTI.DTI_tracts(
     electrode1FileConductivity,
     custom_center=custom_center
 )
+dti_time = time.time() - dti_start
+print(f"DTI tracts processed in {dti_time:.2f}s")
+
+print("Loading ANN model...")
+ann_load_start = time.time()
 ANN_model = ann_predict_lib.ANN(ANN_model)
+ann_load_time = time.time() - ann_load_start
+print(f"ANN model loaded in {ann_load_time:.2f}s")
 ann_hparam_dict = ANN_model.get_hparam_dict()
 num_ecs = ann_hparam_dict["num_ecs"]
 num_fsds = ann_hparam_dict["num_fsds"]
@@ -134,9 +160,16 @@ ANN_REGRESSION = 1 if regression_mode.lower() == "reg" else 0
 NUMBER_OF_SPATIAL_VALUES = max(ann_hparam_dict["num_ecs"], ann_hparam_dict["num_fsds"], ann_hparam_dict["num_ssds"])
 
 xNodeComp, yNodeComp, zNodeComp = test_dti.getNodeCompPos()
+orig_indices = test_dti.getOriginalFiberIndices()
 
 input_array = []
 problem_inds = []
+fem_warning_count = 0
+too_close_both_count = 0
+too_close_extrapolated_count = 0
+extrapolation_boundary_fail_count = 0
+normal_boundary_fail_count = 0
+feature_shape_warning_count = 0
 
 def extrapolate_values(values, center_ind):
     num = len(values) - 1 # ex: 11-1 = 10
@@ -176,7 +209,12 @@ def extrapolate_values(values, center_ind):
 
     return values, center_ind + missing_left - 1
 
-for fib in range(len(xNodeComp)):
+total_fibers = len(xNodeComp)
+fiber_start_time = time.time()
+print(f"\nProcessing {total_fibers} fibers...")
+
+for fib in range(total_fibers):
+    print_progress(fib + 1, total_fibers, prefix='Processing fibers')
     # Get compartmental EC potentials from previously made 3d-grid
     fiberLVoltages = []
     for i in range(len(xNodeComp[fib])):
@@ -189,7 +227,7 @@ for fib in range(len(xNodeComp)):
             fiberLVoltages.append(float(grid_e1( [query_x, query_y, query_z] )))
                     
         except Exception as e:
-            print("WARNING: 3d-position out of COMSOL range! X = " + str(xNodeComp[fib][i]) + ", Y = " + str(yNodeComp[fib][i]) + ", Z = " + str(zNodeComp[fib][i]))
+            fem_warning_count += 1
             pass
                 
     fiberLVoltages_nodes = fiberLVoltages
@@ -204,7 +242,6 @@ for fib in range(len(xNodeComp)):
     fsds = []
 
     input_sizes = [num_ecs, num_fsds, num_ssds]
-    print(f"Input sizes for fiber {fib}: {input_sizes}")
 
     too_close = not fiber_dti.isValidCenterInd
     fiber_11 = fiber_DTI.Fiber(fiberLVoltages_nodes)
@@ -218,12 +255,12 @@ for fib in range(len(xNodeComp)):
     if too_close:
         if too_close_11:
             problem_inds.append(fib)
-            print("too_close_11 and too_close")
+            too_close_both_count += 1
             ecs_at_nodes_around_center = fiber_dti.getValAroundCenterNode("err", num_ecs, center_ind)
             fsds_at_nodes_around_center = fiber_dti.getValAroundCenterNode("err", num_fsds, center_ind)
             ssds_at_nodes_around_center = fiber_dti.getValAroundCenterNode("err", num_ssds, center_ind)
         else:
-            print("too_close but not too_close_11")
+            too_close_extrapolated_count += 1
             ecs_extrapolated, center_ind = extrapolate_values(fiberLVoltages_nodes, center_ind)
             fiber_dti = fiber_DTI.Fiber(ecs_extrapolated)
             #center_ind = fiber_dti.getCenterInd(centering_strategy, NUMBER_OF_SPATIAL_VALUES)
@@ -234,12 +271,11 @@ for fib in range(len(xNodeComp)):
             # Check if any None values were returned (boundary issue after extrapolation)
             if (None in ecs_at_nodes_around_center or None in fsds_at_nodes_around_center or None in ssds_at_nodes_around_center):
                 problem_inds.append(fib)
-                print("Extrapolated fiber still has boundary issues - marking as problem fiber")
+                extrapolation_boundary_fail_count += 1
                 ecs_at_nodes_around_center = fiber_dti.getValAroundCenterNode("err", num_ecs, center_ind)
                 fsds_at_nodes_around_center = fiber_dti.getValAroundCenterNode("err", num_fsds, center_ind)
                 ssds_at_nodes_around_center = fiber_dti.getValAroundCenterNode("err", num_ssds, center_ind)
     else:
-        print("neither")
         ecs_at_nodes_around_center = fiber_dti.getValAroundCenterNode("ec", num_ecs, center_ind)
         fsds_at_nodes_around_center = fiber_dti.getValAroundCenterNode("fsd", num_fsds, center_ind)
         ssds_at_nodes_around_center = fiber_dti.getValAroundCenterNode("ssd", num_ssds, center_ind)
@@ -247,7 +283,7 @@ for fib in range(len(xNodeComp)):
         # Check if any None values were returned (boundary issue on normal fibers)
         if (None in ecs_at_nodes_around_center or None in fsds_at_nodes_around_center or None in ssds_at_nodes_around_center):
             problem_inds.append(fib)
-            print("Normal fiber has boundary issues - marking as problem fiber")
+            normal_boundary_fail_count += 1
             ecs_at_nodes_around_center = fiber_dti.getValAroundCenterNode("err", num_ecs, center_ind)
             fsds_at_nodes_around_center = fiber_dti.getValAroundCenterNode("err", num_fsds, center_ind)
             ssds_at_nodes_around_center = fiber_dti.getValAroundCenterNode("err", num_ssds, center_ind)
@@ -260,15 +296,32 @@ for fib in range(len(xNodeComp)):
         test_features.extend(ssds_at_nodes_around_center)
 
         if np.array(test_features).shape[0] != (1 + num_ecs + num_fsds + num_ssds):
-            print(f"Fiber {fib}, Pulse width {pwd} us: Features: {np.array(test_features).shape}")
+            feature_shape_warning_count += 1
 
         input_array.append(test_features)
 
-# Flatten input_array and iterate over its elements
-flattened_input = [item for sublist in input_array for item in sublist]
-for value in flattened_input:
-    if value is None:
-        print("VALUE IS NONE!")
+# Post-processing summary
+fiber_time = time.time() - fiber_start_time
+print(f"Fiber processing took {fiber_time:.2f}s")
+print(f"  Fibers processed: {total_fibers}")
+print(f"  Problem fibers: {len(problem_inds)}")
+if fem_warning_count > 0:
+    print(f"  FEM out-of-range warnings: {fem_warning_count}")
+if too_close_both_count > 0:
+    print(f"  Too close (both thresholds): {too_close_both_count}")
+if too_close_extrapolated_count > 0:
+    print(f"  Extrapolated fibers: {too_close_extrapolated_count}")
+if extrapolation_boundary_fail_count > 0:
+    print(f"  Extrapolation failures: {extrapolation_boundary_fail_count}")
+if normal_boundary_fail_count > 0:
+    print(f"  Normal boundary failures: {normal_boundary_fail_count}")
+if feature_shape_warning_count > 0:
+    print(f"  Feature shape mismatches: {feature_shape_warning_count}")
+
+# Check for None values in input
+none_count = sum(1 for sublist in input_array for value in sublist if value is None)
+if none_count > 0:
+    print(f"  WARNING: {none_count} None values found in input array!")
 
 if len(input_array) == 0:
     print("\nERROR: No valid fibers found within range of the electrode.")
@@ -280,6 +333,7 @@ if len(input_array) == 0:
     print(f"Wrote empty results to {output_json}")
     sys.exit(0)
 
+print("\nRunning ANN predictions...")
 if ANN_REGRESSION == 1:
     prediction_start_time = time.time()
     ANN_prediction = ANN_model.batch_predict_threshold_reg(input_array)
@@ -289,9 +343,7 @@ else:
     ANN_prediction = ANN_model.batch_predict_threshold(input_array, 100)
     prediction_stop_time = time.time()
 
-print()
-print(str(len(input_array)) + " ANN predictions took " + str(prediction_stop_time - prediction_start_time) + " s")
-print()
+print(f"ANN predictions ({len(input_array)} total) took {prediction_stop_time - prediction_start_time:.2f}s")
 
 result_dict = {}
 
@@ -299,17 +351,23 @@ total_fibs = len(xNodeComp)
 good_fibs = total_fibs - len(problem_inds)
 pulse_width_count = len(pulse_widths)
 
-result_dict["problem_inds"] = problem_inds
-result_dict["valid_inds"] = [i for i in range(total_fibs) if i not in problem_inds]
+# Map filtered-fiber indices back to original tract-file line numbers
+problem_orig = [orig_indices[i] for i in problem_inds]
+problem_set = set(problem_inds)
+valid_orig = [orig_indices[i] for i in range(total_fibs) if i not in problem_set]
+
+result_dict["problem_inds"] = problem_orig
+result_dict["valid_inds"] = valid_orig
 
 for i in range(len(ANN_prediction)):
     pulse_width = pulse_widths[int(i % pulse_width_count)] / 1000
     dti_index = int(i / pulse_width_count)
+    orig_fiber_idx = orig_indices[dti_index]
     
     if pulse_width not in result_dict:
         result_dict[pulse_width] = {}
 
-    result_dict[pulse_width][dti_index] = float(ANN_prediction[i]) 
+    result_dict[pulse_width][orig_fiber_idx] = float(ANN_prediction[i]) 
 
 with open(output_json, 'w') as outfile:
     json.dump(result_dict, outfile, indent=4)
