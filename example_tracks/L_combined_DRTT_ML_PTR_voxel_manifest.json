@@ -1,0 +1,7 @@
+{
+  "bundles": {
+    "L_DRTT_voxel": { "start": 0, "end": 100, "count": 100 },
+    "L_ML_voxel":   { "start": 100, "end": 200, "count": 100 },
+    "L_PTR_voxel":  { "start": 200, "end": 300, "count": 100 }
+  }
+}

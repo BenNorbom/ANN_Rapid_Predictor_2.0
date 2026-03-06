@@ -119,7 +119,63 @@ def add_electric_field(fig, X, Y, Z, V):
     vmin = float(np.nanmin(Vc))
     vmax = float(np.nanmax(Vc))
 
-    dead = 0.15
+    dead = 0.30
+
+    # Adapt colour-scale and opacity to field polarity
+    only_negative = vmax <= 0
+    only_positive = vmin >= 0
+
+    if only_negative:
+        # Red-only scale for purely negative (cathode) fields
+        iso_min, iso_max = -1.0, 0.0
+        cscale = [
+            [0.0,  'rgb(103,0,31)'],
+            [0.25, 'rgb(178,24,43)'],
+            [0.5,  'rgb(214,96,77)'],
+            [0.75, 'rgb(244,165,130)'],
+            [1.0,  'rgb(253,219,199)'],
+        ]
+        oscale = [
+            [0.0,        1.0],
+            [0.45,       0.20],
+            [1.0 - dead, 0.02],
+            [1.0,        0.0],
+        ]
+        cb_tickvals = [-1, 0]
+        cb_ticktext = [f"{vmin:.3g}", "0"]
+    elif only_positive:
+        # Blue-only scale for purely positive (anode) fields
+        iso_min, iso_max = 0.0, 1.0
+        cscale = [
+            [0.0,  'rgb(209,229,240)'],
+            [0.25, 'rgb(146,197,222)'],
+            [0.5,  'rgb(67,147,195)'],
+            [0.75, 'rgb(33,102,172)'],
+            [1.0,  'rgb(5,48,97)'],
+        ]
+        oscale = [
+            [0.0,   0.0],
+            [dead,  0.02],
+            [0.55,  0.20],
+            [1.0,   1.0],
+        ]
+        cb_tickvals = [0, 1]
+        cb_ticktext = ["0", f"{vmax:.3g}"]
+    else:
+        # Diverging red-blue for mixed polarity fields
+        iso_min, iso_max = -1.0, 1.0
+        cscale = 'RdBu'
+        oscale = [
+            [0.0,        1.0],
+            [0.25,       0.20],
+            [0.5 - dead, 0.02],
+            [0.5,        0.0],
+            [0.5 + dead, 0.02],
+            [0.75,       0.20],
+            [1.0,        1.0],
+        ]
+        cb_tickvals = [-1, 0, 1]
+        cb_ticktext = [f"{vmin:.3g}", "0", f"{vmax:.3g}"]
 
     fig.add_trace(go.Volume(
         x=X.flatten(),
@@ -134,24 +190,18 @@ def add_electric_field(fig, X, Y, Z, V):
             "V: %{customdata:.4g} V"
             "<extra>Electric Field</extra>"
         ),
-        isomin=-1.0,
-        isomax=1.0,
+        isomin=iso_min,
+        isomax=iso_max,
         opacity=0.5,
         surface_count=50,
-        colorscale='RdBu',
-        opacityscale=[
-            [0.0,          1.0],
-            [0.5 - dead,   0.08],
-            [0.5,          0.0],
-            [0.5 + dead,   0.08],
-            [1.0,          1.0],
-        ],
+        colorscale=cscale,
+        opacityscale=oscale,
         caps=dict(x_show=False, y_show=False, z_show=False),
         showscale=True,
         colorbar=dict(
-            title="V", x=1.02, len=0.6,
-            tickvals=[-1, 0, 1],
-            ticktext=[f"{vmin:.3g}", "0", f"{vmax:.3g}"],
+            title="V", x=0.02, len=0.6,
+            tickvals=cb_tickvals,
+            ticktext=cb_ticktext,
         ),
         name="Electric Field",
         visible=True,
@@ -339,8 +389,26 @@ def render_scene_plotly(fibers, thresholds_row, voltage_limit, title='',
         scene=scene_dict,
         showlegend=True,
         legend=dict(itemsizing="constant", title="Click to toggle"),
-        margin=dict(l=0, r=0, t=30, b=0),
+        margin=dict(l=60, r=0, t=30, b=0),
     )
+
+    # Add E-field toggle button
+    if field_data is not None:
+        ef_idx = len(fig.data) - 1
+        fig.update_layout(
+            updatemenus=[dict(
+                type="buttons",
+                buttons=[dict(
+                    label="Toggle Electric Field",
+                    method="restyle",
+                    args=[{"visible": [False]}, [ef_idx]],
+                    args2=[{"visible": [True]}, [ef_idx]],
+                )],
+                showactive=True,
+                x=0.0, xanchor="left",
+                y=1.05, yanchor="top",
+            )]
+        )
 
     return fig, activated
 
