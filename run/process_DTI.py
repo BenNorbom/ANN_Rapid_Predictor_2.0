@@ -148,6 +148,16 @@ class DTI_tracts:
 
             ## With this length, get the positions of the node compartments based on the internodal distance
             num_step_points = int(rounded_tract_length / self.node_to_node) + 1
+
+            # Guard against degenerate splines that produce astronomical lengths.
+            # Real brain fibers are at most ~300 mm; cap at 10 000 step points.
+            MAX_STEP_POINTS = 10_000
+            if num_step_points > MAX_STEP_POINTS:
+                print(f"  Warning: fiber {i} has degenerate spline length "
+                      f"({rounded_tract_length:.0f} mm -> {num_step_points} pts). "
+                      f"Capping to {MAX_STEP_POINTS}.")
+                num_step_points = MAX_STEP_POINTS
+
             u_step = np.linspace(0,1,num_step_points)
             x_step, y_step, z_step = splev(u_step, tck)
 
@@ -189,7 +199,12 @@ class DTI_tracts:
         u_fine = np.linspace(0,1,num_true_pts)
         x_fine, y_fine, z_fine = splev(u_fine, tck)
 
+        # Track which original fiber index each entry corresponds to.
+        # At this point the list is still 1:1 with the original file lines.
+        surviving_indices = list(range(len(self.xCompPos)))
+
         lead_tract_sep = 1.135 # 0.635 # Should be radius of lead OR scar tissue
+        dist_indices = []
         for i in range(len(self.xCompPos)): # For each tract in list of tracts
             remove = False
             for j in range(len(self.xCompPos[i])): # For each node in the tract
@@ -206,10 +221,12 @@ class DTI_tracts:
                 dist_xPosL.append(self.xCompPos[i])
                 dist_yPosL.append(self.yCompPos[i])
                 dist_zPosL.append(self.zCompPos[i])
+                dist_indices.append(surviving_indices[i])
 
         self.xCompPos = dist_xPosL
         self.yCompPos = dist_yPosL
         self.zCompPos = dist_zPosL
+        surviving_indices = dist_indices
 
         self.pre_trunc_xNodalComp = self.xCompPos
         self.pre_trunc_yNodalComp = self.yCompPos
@@ -219,6 +236,7 @@ class DTI_tracts:
         trunc_xPosL = []
         trunc_yPosL = []
         trunc_zPosL = []
+        trunc_indices = []
 
         for i in range(len(self.xCompPos)):
             tempFiberX = []
@@ -261,16 +279,31 @@ class DTI_tracts:
                 trunc_xPosL.append(tempFiberX)
                 trunc_yPosL.append(tempFiberY)
                 trunc_zPosL.append(tempFiberZ)
+                trunc_indices.append(surviving_indices[i])
 
         self.xCompPos = trunc_xPosL
         self.yCompPos = trunc_yPosL
         self.zCompPos = trunc_zPosL
+        self.original_fiber_indices = trunc_indices
 
         self.xNodalComp = self.xCompPos
         self.yNodalComp = self.yCompPos
         self.zNodalComp = self.zCompPos
 
         print("Number of tracts that meet all critera: " + str(len(self.xNodalComp)))
+
+    def getOriginalFiberIndices(self):
+        """Return the original tract-file line numbers of the surviving fibers.
+
+        After lead-intersection and FEM-bounds filtering, each element *i* in
+        ``xNodalComp`` / ``yNodalComp`` / ``zNodalComp`` corresponds to
+        original line ``original_fiber_indices[i]`` from the input file.
+
+        Returns
+        -------
+        list of int
+        """
+        return self.original_fiber_indices
 
     def getAllComps(self, lin_comp_pos):
         """Get the compartmental positions for each fiber tract.

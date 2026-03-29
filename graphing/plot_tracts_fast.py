@@ -242,130 +242,326 @@ def contact_label(index, polarity):
 # ---------------------------------------------------------------------------
 
 def add_electric_field(fig, X, Y, Z, V):
-    """Add continuous volumetric electric-field rendering to the figure.
+    """Add electric-field isosurface rendering to the figure.
 
-    A symmetric-log (symlog) transform compresses the huge dynamic range
-    while preserving sign.  The result is mapped to a diverging colour
-    scale (red = negative / cathode, blue = positive / anode) with
-    opacity that fades smoothly to fully transparent near zero.
+    Creates compact sphere-like isosurface shells around each electrode
+    contact where the field is strongest.  Automatically adapts to any
+    electrode configuration (monopolar, bipolar, tripolar, quadrupolar)
+    by rendering separate cathode (red) and anode (blue) isosurfaces
+    around the peak field values.
+
+    Returns the number of Plotly traces added (needed for toggle button).
     """
     Vc = V.copy()
     Vc[np.isnan(Vc)] = 0.0
 
-    # --- symmetric log transform ---
-    # linthresh sets the "floor": values below this become transparent.
-    # Above linthresh the scale is logarithmic to compress the huge range.
-    linthresh = 1e-6  # V
-    sign = np.sign(Vc)
-    mag  = np.abs(Vc)
-    mag_safe = np.maximum(mag, linthresh)  # avoid log10(0)
-    slog = np.where(
-        mag <= linthresh,
-        Vc / linthresh,
-        sign * (1.0 + np.log10(mag_safe / linthresh)),
-    )
+    vmin = float(np.min(Vc))
+    vmax = float(np.max(Vc))
+    abs_peak = max(abs(vmin), abs(vmax))
 
-    # Normalise to [-1, 1]
-    absmax = np.max(np.abs(slog))
-    if absmax > 0:
-        slog /= absmax
+    if abs_peak < 1e-12:
+        return 0
 
-    vmin = float(np.nanmin(Vc))
-    vmax = float(np.nanmax(Vc))
+    only_negative = vmax <= 1e-10
+    only_positive = vmin >= -1e-10
 
-    dead = 0.30
+    x_flat = X.flatten()
+    y_flat = Y.flatten()
+    z_flat = Z.flatten()
+    v_flat = Vc.flatten()
 
-    # Adapt colour-scale and opacity to field polarity
-    only_negative = vmax <= 0
-    only_positive = vmin >= 0
+    # Fraction of each pole's peak value used as the isosurface range.
+    # e.g. 0.50 means show the region where |V| > 50% of |V_peak|.
+    peak_frac = 0.50
+    n_iso = 3          # nested isosurface shells per pole
 
+    traces_added = 0
+
+    # ── Unified colorbar via an invisible marker ────────────────────
     if only_negative:
-        # Red-only scale for purely negative (cathode) fields
-        iso_min, iso_max = -1.0, 0.0
-        cscale = [
-            [0.0,  'rgb(103,0,31)'],
-            [0.25, 'rgb(178,24,43)'],
-            [0.5,  'rgb(214,96,77)'],
-            [0.75, 'rgb(244,165,130)'],
-            [1.0,  'rgb(253,219,199)'],
+        cb_cmin, cb_cmax = vmin, 0
+        cb_cscale = [
+            [0.0, 'rgb(103,0,31)'],   [0.25, 'rgb(178,24,43)'],
+            [0.5, 'rgb(214,96,77)'],  [0.75, 'rgb(244,165,130)'],
+            [1.0, 'rgb(253,219,199)'],
         ]
-        oscale = [
-            [0.0,        1.0],
-            [0.45,       0.20],
-            [1.0 - dead, 0.02],
-            [1.0,        0.0],
-        ]
-        cb_tickvals = [-1, 0]
+        cb_tickvals = [vmin, 0]
         cb_ticktext = ["-max", "0"]
     elif only_positive:
-        # Blue-only scale for purely positive (anode) fields
-        iso_min, iso_max = 0.0, 1.0
-        cscale = [
-            [0.0,  'rgb(209,229,240)'],
-            [0.25, 'rgb(146,197,222)'],
-            [0.5,  'rgb(67,147,195)'],
-            [0.75, 'rgb(33,102,172)'],
-            [1.0,  'rgb(5,48,97)'],
+        cb_cmin, cb_cmax = 0, vmax
+        cb_cscale = [
+            [0.0, 'rgb(209,229,240)'], [0.25, 'rgb(146,197,222)'],
+            [0.5, 'rgb(67,147,195)'],  [0.75, 'rgb(33,102,172)'],
+            [1.0, 'rgb(5,48,97)'],
         ]
-        oscale = [
-            [0.0,   0.0],
-            [dead,  0.02],
-            [0.55,  0.20],
-            [1.0,   1.0],
-        ]
-        cb_tickvals = [0, 1]
+        cb_tickvals = [0, vmax]
         cb_ticktext = ["0", "+max"]
     else:
-        # Diverging red-blue for mixed polarity fields
-        iso_min, iso_max = -1.0, 1.0
-        cscale = 'RdBu'
-        oscale = [
-            [0.0,        1.0],
-            [0.25,       0.20],
-            [0.5 - dead, 0.02],
-            [0.5,        0.0],
-            [0.5 + dead, 0.02],
-            [0.75,       0.20],
-            [1.0,        1.0],
-        ]
-        cb_tickvals = [-1, 0, 1]
+        cb_cmin, cb_cmax = -abs_peak, abs_peak
+        cb_cscale = 'RdBu'
+        cb_tickvals = [-abs_peak, 0, abs_peak]
         cb_ticktext = ["-max", "0", "+max"]
 
-    fig.add_trace(go.Volume(
-        x=X.flatten(),
-        y=Y.flatten(),
-        z=Z.flatten(),
-        value=slog.flatten(),
-        customdata=Vc.flatten(),
-        hovertemplate=(
-            "x: %{x:.1f}<br>"
-            "y: %{y:.1f}<br>"
-            "z: %{z:.1f}<br>"
-            "V: %{customdata:.4g} V"
-            "<extra>Electric Field</extra>"
+    cx = float(np.mean(x_flat))
+    cy = float(np.mean(y_flat))
+    cz = float(np.mean(z_flat))
+    fig.add_trace(go.Scatter3d(
+        x=[cx], y=[cy], z=[cz],
+        mode='markers',
+        marker=dict(
+            size=0.001, opacity=0,
+            color=[0],
+            colorscale=cb_cscale,
+            cmin=cb_cmin, cmax=cb_cmax,
+            showscale=True,
+            colorbar=dict(title="E-field", x=0.02, len=0.6,
+                         tickvals=cb_tickvals, ticktext=cb_ticktext),
         ),
-        isomin=iso_min,
-        isomax=iso_max,
-        opacity=0.5,
-        surface_count=50,
-        colorscale=cscale,
-        opacityscale=oscale,
-        caps=dict(x_show=False, y_show=False, z_show=False),
-        showscale=True,
-        colorbar=dict(
-            title="E-field", x=0.02, len=0.6,
-            tickvals=cb_tickvals,
-            ticktext=cb_ticktext,
-        ),
-        name="Electric Field",
-        visible=True,
-        legendgroup="efield",
-        showlegend=True,
+        showlegend=False, hoverinfo='skip', legendgroup="efield",
     ))
+    traces_added += 1
+
+    hover_tpl = (
+        "x: %{x:.1f}<br>"
+        "y: %{y:.1f}<br>"
+        "z: %{z:.1f}<br>"
+        "V: %{value:.4g} V"
+    )
+
+    # ── Cathode (negative) isosurface ───────────────────────────────
+    if vmin < -1e-10:
+        neg_peak = abs(vmin)
+        iso_max_neg = -(neg_peak * (1.0 - peak_frac))
+        red_cs = [
+            [0.0, 'rgb(103,0,31)'],
+            [0.5, 'rgb(178,24,43)'],
+            [1.0, 'rgb(244,165,130)'],
+        ]
+        fig.add_trace(go.Isosurface(
+            x=x_flat, y=y_flat, z=z_flat, value=v_flat,
+            isomin=vmin, isomax=iso_max_neg,
+            surface_count=n_iso,
+            colorscale=red_cs,
+            opacity=0.6,
+            caps=dict(x_show=False, y_show=False, z_show=False),
+            showscale=False,
+            name="Electric Field",
+            visible=True, legendgroup="efield", showlegend=True,
+            hovertemplate=hover_tpl + "<extra>E-field (cathode)</extra>",
+        ))
+        traces_added += 1
+
+    # ── Anode (positive) isosurface ─────────────────────────────────
+    if vmax > 1e-10:
+        pos_peak = abs(vmax)
+        iso_min_pos = pos_peak * (1.0 - peak_frac)
+        blue_cs = [
+            [0.0, 'rgb(209,229,240)'],
+            [0.5, 'rgb(67,147,195)'],
+            [1.0, 'rgb(5,48,97)'],
+        ]
+        fig.add_trace(go.Isosurface(
+            x=x_flat, y=y_flat, z=z_flat, value=v_flat,
+            isomin=iso_min_pos, isomax=vmax,
+            surface_count=n_iso,
+            colorscale=blue_cs,
+            opacity=0.6,
+            caps=dict(x_show=False, y_show=False, z_show=False),
+            showscale=False,
+            name="Electric Field",
+            visible=True, legendgroup="efield", showlegend=False,
+            hovertemplate=hover_tpl + "<extra>E-field (anode)</extra>",
+        ))
+        traces_added += 1
+
+    return traces_added
 
 
 # ---------------------------------------------------------------------------
-# Scene rendering
+# Interactive HTML generation
+# ---------------------------------------------------------------------------
+
+HTML_TEMPLATE_FAST = r"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fiber Activation Viewer</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+#controls {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 10px 16px; background: #f5f5f5; border-bottom: 1px solid #ddd;
+}
+#controls label { font-size: 14px; font-weight: 600; color: #333; }
+#controls select, #controls input[type=number] {
+  padding: 5px 10px; font-size: 14px; border: 1px solid #aaa; border-radius: 4px;
+}
+#controls input[type=number] { width: 90px; }
+#controls button {
+  padding: 6px 18px; font-size: 14px; background: #4CAF50; color: white;
+  border: none; border-radius: 4px; cursor: pointer;
+}
+#controls button:hover { background: #45a049; }
+#status { margin-left: auto; font-size: 13px; color: #666; }
+#plot { width: 100%; height: calc(100vh - 52px); }
+</style>
+</head>
+<body>
+<div id="controls">
+  <label>Pulse Width:
+    <select id="pw-select" onchange="buildPlot()">
+___PW_OPTIONS___
+    </select>
+  </label>
+  <label>Voltage (V):
+    <input id="voltage-input" type="number" value="___DEFAULT_VOLTAGE___" step="0.1" min="0">
+  </label>
+  <button onclick="buildPlot()">Apply</button>
+  <span id="status"></span>
+</div>
+<div id="plot"></div>
+<script>
+var FIBERS = ___FIBERS_DATA___;
+var THRESHOLDS = ___THRESHOLDS_DATA___;
+var EFIELD_TRACES = ___EFIELD_DATA___;
+var SHOW_AXES = ___SHOW_AXES___;
+
+function buildMergedTrace(indices, color, width, opacity, name, visible, legendgroup) {
+  var x = [], y = [], z = [];
+  for (var ii = 0; ii < indices.length; ii++) {
+    var fib = FIBERS[indices[ii]];
+    for (var j = 0; j < fib.length; j += 3) {
+      x.push(fib[j]); y.push(fib[j+1]); z.push(fib[j+2]);
+    }
+    x.push(null); y.push(null); z.push(null);
+  }
+  return {
+    type: "scatter3d", mode: "lines",
+    x: x, y: y, z: z,
+    line: {color: color, width: width},
+    opacity: opacity, name: name,
+    connectgaps: false, showlegend: true,
+    visible: visible, legendgroup: legendgroup
+  };
+}
+
+function buildPlot() {
+  var pwKey = document.getElementById("pw-select").value;
+  var voltage = parseFloat(document.getElementById("voltage-input").value);
+  if (isNaN(voltage) || voltage <= 0) return;
+  var gd = document.getElementById("plot");
+  var savedCamera = null;
+  var savedVis = {};
+  if (gd.data && gd.data.length > 0) {
+    for (var t = 0; t < gd.data.length; t++) {
+      var lg = gd.data[t].legendgroup;
+      if (lg) savedVis[lg] = gd.data[t].visible;
+    }
+  }
+  if (gd.layout && gd.layout.scene && gd.layout.scene.camera) {
+    savedCamera = JSON.parse(JSON.stringify(gd.layout.scene.camera));
+  }
+  document.getElementById("status").textContent = "Building plot...";
+  setTimeout(function() {
+    var thresholds = THRESHOLDS[pwKey];
+    var activeIdxs = [], inactiveIdxs = [];
+    for (var i = 0; i < FIBERS.length; i++) {
+      var thr = (i < thresholds.length && thresholds[i] !== null) ? thresholds[i] : Infinity;
+      if (thr < voltage) activeIdxs.push(i); else inactiveIdxs.push(i);
+    }
+    var traces = [];
+    if (activeIdxs.length > 0)
+      traces.push(buildMergedTrace(activeIdxs, "red", 2, 1.0, "Activated", true, "activated"));
+    if (inactiveIdxs.length > 0)
+      traces.push(buildMergedTrace(inactiveIdxs, "black", 1, 0.15, "Inactive", "legendonly", "inactive"));
+    var efStart = traces.length;
+    for (var k = 0; k < EFIELD_TRACES.length; k++) {
+      var tc = {};
+      for (var key in EFIELD_TRACES[k]) tc[key] = EFIELD_TRACES[k][key];
+      traces.push(tc);
+    }
+    var axStyle = SHOW_AXES
+      ? {visible:true, showticklabels:true, showgrid:true, zeroline:true, title:""}
+      : {visible:false, showticklabels:false, showgrid:false, zeroline:false};
+    var layout = {
+      title: {text: "Pulse Width: " + pwKey + " \u03bcs  |  Threshold: " + voltage + " V", x: 0.5, xanchor: "center"},
+      scene: {
+        camera: {eye: {x:1.5, y:1.5, z:1.5}},
+        aspectmode: "data",
+        xaxis: axStyle, yaxis: axStyle, zaxis: axStyle
+      },
+      showlegend: true,
+      legend: {itemsizing: "constant", title: {text: "Click to toggle"}},
+      margin: {l:60, r:0, t:30, b:0}
+    };
+    if (EFIELD_TRACES.length > 0) {
+      var efIdxs = [];
+      for (var ei = efStart; ei < traces.length; ei++) efIdxs.push(ei);
+      layout.updatemenus = [{
+        type: "buttons",
+        buttons: [{
+          label: "Toggle Electric Field",
+          method: "restyle",
+          args: [{visible: efIdxs.map(function(){return false;})}, efIdxs],
+          args2: [{visible: efIdxs.map(function(){return true;})}, efIdxs]
+        }],
+        showactive: true, x: 0.0, xanchor: "left", y: 1.05, yanchor: "top"
+      }];
+    }
+    for (var t = 0; t < traces.length; t++) {
+      var lg = traces[t].legendgroup;
+      if (lg && savedVis[lg] !== undefined) traces[t].visible = savedVis[lg];
+    }
+    if (savedCamera) layout.scene.camera = savedCamera;
+    Plotly.react("plot", traces, layout);
+    document.getElementById("status").textContent =
+      "Activated: " + activeIdxs.length + " / " + FIBERS.length + " fibers";
+  }, 50);
+}
+
+document.getElementById("voltage-input").addEventListener("keypress", function(e) {
+  if (e.key === "Enter") buildPlot();
+});
+buildPlot();
+</script>
+</body>
+</html>"""  # end HTML_TEMPLATE_FAST
+
+
+def prepare_efield_traces(field_data):
+    """Build E-field Plotly traces and return as a JSON string."""
+    if field_data is None:
+        return "[]"
+    import plotly.io as pio
+    X, Y, Z, V = field_data
+    temp_fig = go.Figure()
+    add_electric_field(temp_fig, X, Y, Z, V)
+    fig_dict = json.loads(pio.to_json(temp_fig))
+    return json.dumps(fig_dict['data'])
+
+
+def write_interactive_html(path, fiber_coords, all_thresholds, pw_options,
+                            efield_traces_json, show_axes, default_voltage=5.0):
+    """Write a single interactive HTML viewer with PW dropdown and voltage input."""
+    opts_html = "\n".join(
+        f'      <option value="{key}">{label}</option>' for key, label in pw_options
+    )
+    html = HTML_TEMPLATE_FAST
+    html = html.replace("___PW_OPTIONS___", opts_html)
+    html = html.replace("___FIBERS_DATA___", json.dumps(fiber_coords))
+    html = html.replace("___THRESHOLDS_DATA___", json.dumps(all_thresholds))
+    html = html.replace("___EFIELD_DATA___", efield_traces_json)
+    html = html.replace("___SHOW_AXES___", "true" if show_axes else "false")
+    html = html.replace("___DEFAULT_VOLTAGE___", str(default_voltage))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"Wrote interactive HTML: {path}")
+
+
+# ---------------------------------------------------------------------------
+# Scene rendering (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 
 def render(fibers, thresholds, voltage, electrode_center, title="",
@@ -410,6 +606,7 @@ def render(fibers, thresholds, voltage, electrode_center, title="",
         ))
 
     # Electric field (replaces lead mesh)
+    n_before_efield = len(fig.data)
     if field_data is not None:
         X, Y, Z, V = field_data
         add_electric_field(fig, X, Y, Z, V)
@@ -446,15 +643,16 @@ def render(fibers, thresholds, voltage, electrode_center, title="",
 
     # Add E-field toggle button
     if field_data is not None:
-        ef_idx = len(fig.data) - 1
+        efield_indices = list(range(n_before_efield, len(fig.data)))
+        n_ef = len(efield_indices)
         fig.update_layout(
             updatemenus=[dict(
                 type="buttons",
                 buttons=[dict(
                     label="Toggle Electric Field",
                     method="restyle",
-                    args=[{"visible": [False]}, [ef_idx]],
-                    args2=[{"visible": [True]}, [ef_idx]],
+                    args=[{"visible": [False] * n_ef}, efield_indices],
+                    args2=[{"visible": [True] * n_ef}, efield_indices],
                 )],
                 showactive=True,
                 x=0.0, xanchor="left",
@@ -500,8 +698,9 @@ Examples
         help="Directory where HTML plots will be saved.",
     )
     parser.add_argument(
-        "--activation_threshold", type=float, default=3.0, metavar="VOLTS",
-        help="Voltage (V) below which a fiber is considered activated.  Default: 3.0",
+        "--activation_threshold", type=float, default=5.0, metavar="VOLTS",
+        help="Default voltage (V) below which a fiber is considered activated.  "
+             "Can be changed interactively in the HTML viewer.  Default: 5.0",
     )
     parser.add_argument(
         "--electrode_center", type=float, nargs=3, default=None, metavar=("X", "Y", "Z"),
@@ -584,36 +783,42 @@ Examples
             sys.exit(1)
         print(f"  {len(fibers)} fibers after filtering.")
 
-    # 4. Generate one plot per pulse width
-    summary = {}
-    for idx, pw in enumerate(pw_keys):
-        pw_us = pw * 1000  # convert seconds -> microseconds for display
-        title = f"Pulse Width: {pw_us:.0f} us  |  Threshold: {args.activation_threshold} V"
-        print(f"\nPlotting PW {pw_us:.0f} us  ({idx + 1}/{len(pw_keys)}) ...")
+    # 4. Prepare data for interactive HTML
+    stride = max(1, args.simplify)
+    print(f"\nPreparing fiber data (simplify={stride}) ...")
+    fiber_coords = []
+    for fib in fibers:
+        coords = fib[::stride] if stride > 1 else fib
+        fiber_coords.append(np.round(coords, 2).flatten().tolist())
 
-        thresholds = get_thresholds_for_pw(data, pw)
-        fig, n_active = render(
-            fibers, thresholds, args.activation_threshold,
-            electrode_center, title, args.show_axes,
-            electrode_config=electrode_config,
-            field_data=field_data,
-            max_simplify=args.simplify,
-        )
+    # Collect thresholds per PW (aligned to display fiber indices)
+    all_thresholds = {}
+    pw_options = []
+    for pw in pw_keys:
+        pw_us = f"{pw * 1000:.0f}"
+        thr_list = get_thresholds_for_pw(data, pw)
+        padded = []
+        for i in range(len(fibers)):
+            if i < len(thr_list):
+                try:
+                    padded.append(round(float(thr_list[i]), 4))
+                except (TypeError, ValueError):
+                    padded.append(None)
+            else:
+                padded.append(None)
+        all_thresholds[pw_us] = padded
+        pw_options.append((pw_us, f"{pw_us} \u03bcs"))
 
-        out_html = os.path.join(args.output, f"activation_pw_{idx:02d}_{pw_us:.0f}us.html")
-        fig.write_html(out_html)
-        print(f"  Saved {out_html}")
+    # E-field traces
+    efield_json = prepare_efield_traces(field_data)
 
-        summary[f"{pw_us:.0f}"] = n_active
-
-    # 5. Write summary
-    summary_path = os.path.join(args.output, "activation_summary.json")
-    with open(summary_path, "w") as f:
-        json.dump(
-            {"activation_threshold_V": args.activation_threshold, "activated_counts": summary},
-            f, indent=2,
-        )
-    print(f"\nDone. Summary -> {summary_path}")
+    # Generate single interactive HTML
+    out_html = os.path.join(args.output, "activation.html")
+    write_interactive_html(
+        out_html, fiber_coords, all_thresholds, pw_options,
+        efield_json, args.show_axes, default_voltage=args.activation_threshold,
+    )
+    print(f"\nDone. Interactive viewer -> {out_html}")
 
 
 if __name__ == "__main__":
