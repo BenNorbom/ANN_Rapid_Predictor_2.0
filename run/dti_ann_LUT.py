@@ -268,8 +268,14 @@ for fib in range(total_fibers):
             fsds_at_nodes_around_center = fiber_dti.getValAroundCenterNode("fsd", num_fsds, center_ind)
             ssds_at_nodes_around_center = fiber_dti.getValAroundCenterNode("ssd", num_ssds, center_ind)
             
+            # Validate boundaries using full NUMBER_OF_SPATIAL_VALUES so CNN models
+            # (which may have num_fsds=0 / num_ssds=0) detect the same problem fibers as ANNs
+            ecs_check = fiber_dti.getValAroundCenterNode("ec", NUMBER_OF_SPATIAL_VALUES, center_ind)
+            fsd_check = fiber_dti.getValAroundCenterNode("fsd", NUMBER_OF_SPATIAL_VALUES, center_ind)
+            ssd_check = fiber_dti.getValAroundCenterNode("ssd", NUMBER_OF_SPATIAL_VALUES, center_ind)
+            
             # Check if any None values were returned (boundary issue after extrapolation)
-            if (None in ecs_at_nodes_around_center or None in fsds_at_nodes_around_center or None in ssds_at_nodes_around_center):
+            if (None in ecs_check or None in fsd_check or None in ssd_check):
                 problem_inds.append(fib)
                 extrapolation_boundary_fail_count += 1
                 ecs_at_nodes_around_center = fiber_dti.getValAroundCenterNode("err", num_ecs, center_ind)
@@ -280,8 +286,14 @@ for fib in range(total_fibers):
         fsds_at_nodes_around_center = fiber_dti.getValAroundCenterNode("fsd", num_fsds, center_ind)
         ssds_at_nodes_around_center = fiber_dti.getValAroundCenterNode("ssd", num_ssds, center_ind)
         
+        # Validate boundaries using full NUMBER_OF_SPATIAL_VALUES so CNN models
+        # (which may have num_fsds=0 / num_ssds=0) detect the same problem fibers as ANNs
+        ecs_check = fiber_dti.getValAroundCenterNode("ec", NUMBER_OF_SPATIAL_VALUES, center_ind)
+        fsd_check = fiber_dti.getValAroundCenterNode("fsd", NUMBER_OF_SPATIAL_VALUES, center_ind)
+        ssd_check = fiber_dti.getValAroundCenterNode("ssd", NUMBER_OF_SPATIAL_VALUES, center_ind)
+        
         # Check if any None values were returned (boundary issue on normal fibers)
-        if (None in ecs_at_nodes_around_center or None in fsds_at_nodes_around_center or None in ssds_at_nodes_around_center):
+        if (None in ecs_check or None in fsd_check or None in ssd_check):
             problem_inds.append(fib)
             normal_boundary_fail_count += 1
             ecs_at_nodes_around_center = fiber_dti.getValAroundCenterNode("err", num_ecs, center_ind)

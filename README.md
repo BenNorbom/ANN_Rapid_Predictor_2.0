@@ -2,8 +2,9 @@
 
 Computational models are powerful tools that can enable the optimization of deep brain stimulation (DBS). To enhance the clinical practicality of these models, their computational expense and required technical expertise must be minimized. An important aspect of DBS models is the prediction of neural activation in response to electrical stimulation. Existing rapid predictors of activation simplify implementation and reduce prediction runtime, but at the expense of accuracy. We sought to address this issue by leveraging the speed and generalization abilities of artificial neural networks (ANNs) to create a novel predictor of neural fiber activation in response to DBS.
 
-<img width="1916" height="1042" alt="image" src="https://github.com/user-attachments/assets/a006e257-c8ec-404d-bf50-9a2603bc3709" />
-DRTT fibers activated by a bipolar electrode
+<img width="1918" height="1047" alt="image" src="https://github.com/user-attachments/assets/6003b882-db0a-4762-a454-f960ef602b0c" />
+
+DRTT, ML, and PTR fibers activated by a bipolar electrode
 
 ## Installation
 
@@ -66,12 +67,19 @@ See [run/README.md](run/README.md) for detailed argument descriptions.
 
 ### 2. Visualize the results
 
+Each visualization script produces a **single interactive HTML file** (`activation.html`)
+with a pulse width dropdown and a voltage threshold input that you can change
+directly in the browser.
+
 ```bash
 python graphing/plot_tracts_fast.py \
     --tract example_tracks/L_DRTT_voxel.txt \
     --results run/results.json \
     --output output_viz/
 ```
+
+Then open `output_viz/activation.html` in your browser. Use the dropdown to
+switch pulse widths and the voltage input to adjust the activation threshold.
 
 To overlay the electric potential field, add `--electrode` and `--electrode_center`:
 

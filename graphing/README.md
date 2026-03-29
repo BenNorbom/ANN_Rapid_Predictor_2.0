@@ -1,7 +1,9 @@
 # Visualization Scripts
 
 This directory contains three visualization scripts for tractography activation results.
-All produce interactive 3D HTML plots using [Plotly](https://plotly.com/python/).
+All produce a single interactive 3D HTML file using [Plotly](https://plotly.com/python/),
+with built-in controls for switching pulse widths and adjusting the activation
+voltage threshold directly in the browser.
 
 > **Windows / PowerShell Note:** PowerShell does not support `\` for line continuation. Replace `\` with a backtick `` ` `` at the end of each line, or run the command on a single line.
 
@@ -10,10 +12,15 @@ All produce interactive 3D HTML plots using [Plotly](https://plotly.com/python/)
 ## Script Overview
 
 | Script | Best For | Fiber Rendering |
-|--------|----------|-----------------|
+|--------|----------|------------------|
 | `plot_tracts_fast.py` | Large datasets (100k+ fibers) | 2 merged WebGL traces |
-| `plot_tracts.py` | Small datasets, single-PW interactive | Per-fiber traces |
+| `plot_tracts.py` | Small datasets with per-fiber detail | Per-fiber traces |
 | `plot_tracts_bundles.py` | Named bundles (DRTT, ML, PTR) with distinct colours | Bundle-aware merged traces |
+
+All three scripts produce a **single `activation.html`** file containing:
+- A **pulse width dropdown** to switch between pulse widths
+- A **voltage input** to change the activation threshold interactively
+- An **Apply** button (or press Enter) to re-render with the new settings
 
 ---
 
@@ -21,6 +28,7 @@ All produce interactive 3D HTML plots using [Plotly](https://plotly.com/python/)
 
 Fast 3D visualization designed to handle 100,000+ fibers efficiently by merging
 all fiber geometry into just two WebGL traces (activated and inactive).
+Produces a single `activation.html` with interactive pulse width and voltage controls.
 
 ### Usage
 
@@ -40,7 +48,7 @@ python graphing/plot_tracts_fast.py --tract <TRACT_FILE> --results <RESULTS_JSON
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--activation_threshold VOLTS` | `3.0` | Voltage (V) below which a fiber is considered **activated**. |
+| `--activation_threshold VOLTS` | `5.0` | Default voltage (V) below which a fiber is considered **activated**. Can be changed interactively in the HTML viewer. |
 | `--electrode FILE` | none | Path to the electrode FEM export file (`.txt`, COMSOL format). When provided, an electric-field volume is rendered. |
 | `--electrode_center X Y Z` | `0 0 0` | X Y Z voxel position of the electrode center. Used to re-center the FEM grid so the field aligns with the fiber tracts. |
 | `--electrode_config CONFIG` | none | Contact configuration string (e.g. `01-23`, `+012-3`, `-0+1-2+3`). `-` = cathode (red), `+` = anode (blue), unmarked = inactive (grey). |
@@ -81,7 +89,8 @@ python graphing/plot_tracts_fast.py \
 ## plot_tracts.py
 
 Original visualization script with per-fiber rendering. Better suited for smaller
-tract files or when you need single pulse-width interactive plots.
+tract files. Produces a single `activation.html` with interactive pulse width
+and voltage controls.
 
 ### Usage
 
@@ -101,7 +110,7 @@ python graphing/plot_tracts.py --tract <TRACT_FILE> --results <RESULTS_JSON> --o
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--voltage VOLTS` | `3.0` | Activation threshold voltage. |
+| `--voltage VOLTS` | `5.0` | Default activation threshold voltage. Can be changed interactively in the HTML viewer. |
 | `--cond TYPE` | `anisotropic` | Conductivity type: `anisotropic` or `isotropic`. |
 | `--electrode FILE` | none | Path to the electrode FEM export file. Renders an electric-field volume in the 3D scene. |
 | `--electrode_center X Y Z` | none | X Y Z voxel position of the electrode center for field re-centering. |
@@ -110,7 +119,6 @@ python graphing/plot_tracts.py --tract <TRACT_FILE> --results <RESULTS_JSON> --o
 | `--show_axes` | off | Show toggleable XYZ axes. |
 | `--filter_indices FILE` | none | Path to a JSON or text file listing the indices of fibers that were simulated. |
 | `--all_fibers` | off | Plot ALL fibers, ignoring the `--filter_indices` file. |
-| `--interactive_pw INDEX` | none | Render a single pulse width by index interactively. |
 
 ### Examples
 
@@ -130,12 +138,12 @@ python graphing/plot_tracts.py \
     --electrode_center 167 223 147 \
     --field_subsample 4
 
-# Render a single pulse width interactively
+# Use a custom default voltage
 python graphing/plot_tracts.py \
     --tract example_tracks/L_DRTT_voxel.txt \
     --results run/results.json \
     --output output_viz/ \
-    --interactive_pw 0
+    --voltage 3.0
 ```
 
 ---
@@ -143,9 +151,10 @@ python graphing/plot_tracts.py \
 ## plot_tracts_bundles.py
 
 Bundle-aware visualization that highlights named fiber bundles (DRTT, ML, PTR)
-in distinct colours. The script reads a **combined tract file** (multiple tract
-files concatenated end-to-end) and a **manifest JSON** that records which line
-ranges belong to each bundle.
+in distinct colours. Produces a single `activation.html` with interactive pulse
+width and voltage controls. The script reads a **combined tract file** (multiple
+tract files concatenated end-to-end) and a **manifest JSON** that records which
+line ranges belong to each bundle.
 
 ### Preparing the Combined Tract File
 
@@ -252,7 +261,7 @@ python graphing/plot_tracts_bundles.py \
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--activation_threshold VOLTS` | `3.0` | Voltage (V) below which a fiber is considered **activated**. |
+| `--activation_threshold VOLTS` | `5.0` | Default voltage (V) below which a fiber is considered **activated**. Can be changed interactively in the HTML viewer. |
 | `--electrode FILE` | none | Path to the electrode FEM export file (`.txt`, COMSOL format). Renders an electric-field volume. |
 | `--electrode_center X Y Z` | `0 0 0` | X Y Z voxel position of the electrode center for re-centering the FEM grid. |
 | `--electrode_config CONFIG` | none | Contact configuration string (e.g. `01-23`, `+012-3`, `-0+1-2+3`). |
@@ -387,8 +396,21 @@ independent of the legend.
 ### Pulse Width Auto-Detection
 
 All scripts automatically read whatever pulse widths are present in the results
-JSON file. There is no need to specify them — if the simulation ran one pulse
-width, one plot is generated; if it ran all 17, you get 17 plots.
+JSON file. There is no need to specify them — all pulse widths are embedded
+into the single HTML file and accessible via the dropdown menu.
+
+---
+
+## Interactive Controls
+
+The generated `activation.html` file includes a toolbar at the top with:
+- **Pulse Width dropdown** — select which pulse width to display
+- **Voltage input** — set the activation threshold (default from `--activation_threshold` or `--voltage`)
+- **Apply button** — re-render the plot (also triggered by pressing Enter in the voltage field)
+- **Status indicator** — shows the number of activated fibers
+
+These controls allow you to explore all pulse widths and voltage thresholds
+without re-running the script or generating multiple files.
 
 ---
 
@@ -403,18 +425,17 @@ Each plot has clickable legend groups you can show/hide:
 
 ## Viewing the Output
 
-All scripts generate `.html` files in your output directory (e.g.
-`activation_pw_00_60us.html`).
+Each script generates a single `activation.html` file in your output directory.
 
-**Option A: Local server (recommended for many files)**
+**Option A: Open directly**
+Double-click the `activation.html` file to open it in your browser.
+
+**Option B: Local server**
 ```bash
 cd output_viz
 python -m http.server
 ```
-Then open [http://localhost:8000](http://localhost:8000) in your browser.
-
-**Option B: Open directly**
-Double-click any `.html` file to open it in your browser.
+Then open [http://localhost:8000/activation.html](http://localhost:8000/activation.html) in your browser.
 
 ### 3D Navigation
 - **Left-click + drag** — Rotate
