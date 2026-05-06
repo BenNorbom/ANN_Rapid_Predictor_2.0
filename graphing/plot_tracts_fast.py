@@ -3,7 +3,7 @@ Fast 3D visualization for large tractography datasets.
 
 Reads ANN prediction results and the corresponding tract file, then generates
 interactive Plotly HTML plots showing activated vs. inactive fibers with an
-optional electric-field isosurface from the electrode FEM data.
+optional voltage isosurface from the electrode FEM data.
 
 Key design: Only TWO Plotly traces are created for fibers (one red "Activated",
 one grey "Inactive"), with individual fibers merged into single coordinate arrays
@@ -89,10 +89,10 @@ def get_thresholds_for_pw(data, pw_key):
 
 
 # ---------------------------------------------------------------------------
-# Electric field loading (subsampled for visualisation)
+# Voltage loading (subsampled for visualisation)
 # ---------------------------------------------------------------------------
 
-def load_electrode_field(path, subsample=4, electrode_center=None):
+def load_electrode_voltage(path, subsample=4, electrode_center=None):
     """Load a COMSOL electrode export and return subsampled 3D field data.
 
     Parameters
@@ -238,11 +238,11 @@ def contact_label(index, polarity):
 
 
 # ---------------------------------------------------------------------------
-# Electric field rendering
+# Voltage rendering
 # ---------------------------------------------------------------------------
 
-def add_electric_field(fig, X, Y, Z, V):
-    """Add electric-field isosurface rendering to the figure.
+def add_voltage(fig, X, Y, Z, V):
+    """Add voltage isosurface rendering to the figure.
 
     Creates compact sphere-like isosurface shells around each electrode
     contact where the field is strongest.  Automatically adapts to any
@@ -314,10 +314,10 @@ def add_electric_field(fig, X, Y, Z, V):
             colorscale=cb_cscale,
             cmin=cb_cmin, cmax=cb_cmax,
             showscale=True,
-            colorbar=dict(title="E-field", x=0.02, len=0.6,
+            colorbar=dict(title="Voltage", x=0.02, len=0.6,
                          tickvals=cb_tickvals, ticktext=cb_ticktext),
         ),
-        showlegend=False, hoverinfo='skip', legendgroup="efield",
+        showlegend=False, hoverinfo='skip', legendgroup="voltage",
     ))
     traces_added += 1
 
@@ -345,9 +345,9 @@ def add_electric_field(fig, X, Y, Z, V):
             opacity=0.6,
             caps=dict(x_show=False, y_show=False, z_show=False),
             showscale=False,
-            name="Electric Field",
-            visible=True, legendgroup="efield", showlegend=True,
-            hovertemplate=hover_tpl + "<extra>E-field (cathode)</extra>",
+            name="Voltage",
+            visible=True, legendgroup="voltage", showlegend=True,
+            hovertemplate=hover_tpl + "<extra>Voltage (cathode)</extra>",
         ))
         traces_added += 1
 
@@ -368,9 +368,9 @@ def add_electric_field(fig, X, Y, Z, V):
             opacity=0.6,
             caps=dict(x_show=False, y_show=False, z_show=False),
             showscale=False,
-            name="Electric Field",
-            visible=True, legendgroup="efield", showlegend=False,
-            hovertemplate=hover_tpl + "<extra>E-field (anode)</extra>",
+            name="Voltage",
+            visible=True, legendgroup="voltage", showlegend=False,
+            hovertemplate=hover_tpl + "<extra>Voltage (anode)</extra>",
         ))
         traces_added += 1
 
@@ -428,9 +428,9 @@ ___PW_OPTIONS___
 <script>
 var FIBERS = ___FIBERS_DATA___;
 var THRESHOLDS = ___THRESHOLDS_DATA___;
-var EFIELD_TRACES = ___EFIELD_DATA___;
+var VOLTAGE_TRACES = ___VOLTAGE_DATA___;
 var SHOW_AXES = ___SHOW_AXES___;
-var V_TO_MA = 1.123;
+var V_TO_MA = ___V_TO_MA___;
 
 function syncMA(vInput) {
   var v = parseFloat(vInput.value);
@@ -490,9 +490,9 @@ function buildPlot() {
     if (inactiveIdxs.length > 0)
       traces.push(buildMergedTrace(inactiveIdxs, "black", 1, 0.15, "Inactive", "legendonly", "inactive"));
     var efStart = traces.length;
-    for (var k = 0; k < EFIELD_TRACES.length; k++) {
+    for (var k = 0; k < VOLTAGE_TRACES.length; k++) {
       var tc = {};
-      for (var key in EFIELD_TRACES[k]) tc[key] = EFIELD_TRACES[k][key];
+      for (var key in VOLTAGE_TRACES[k]) tc[key] = VOLTAGE_TRACES[k][key];
       traces.push(tc);
     }
     var axStyle = SHOW_AXES
@@ -509,13 +509,13 @@ function buildPlot() {
       legend: {itemsizing: "constant", title: {text: "Click to toggle"}},
       margin: {l:60, r:0, t:30, b:0}
     };
-    if (EFIELD_TRACES.length > 0) {
+    if (VOLTAGE_TRACES.length > 0) {
       var efIdxs = [];
       for (var ei = efStart; ei < traces.length; ei++) efIdxs.push(ei);
       layout.updatemenus = [{
         type: "buttons",
         buttons: [{
-          label: "Toggle Electric Field",
+          label: "Toggle Voltage",
           method: "restyle",
           args: [{visible: efIdxs.map(function(){return false;})}, efIdxs],
           args2: [{visible: efIdxs.map(function(){return true;})}, efIdxs]
@@ -546,20 +546,21 @@ buildPlot();
 </html>"""  # end HTML_TEMPLATE_FAST
 
 
-def prepare_efield_traces(field_data):
-    """Build E-field Plotly traces and return as a JSON string."""
+def prepare_voltage_traces(field_data):
+    """Build Voltage Plotly traces and return as a JSON string."""
     if field_data is None:
         return "[]"
     import plotly.io as pio
     X, Y, Z, V = field_data
     temp_fig = go.Figure()
-    add_electric_field(temp_fig, X, Y, Z, V)
+    add_voltage(temp_fig, X, Y, Z, V)
     fig_dict = json.loads(pio.to_json(temp_fig))
     return json.dumps(fig_dict['data'])
 
 
 def write_interactive_html(path, fiber_coords, all_thresholds, pw_options,
-                            efield_traces_json, show_axes, default_voltage=5.0):
+                            voltage_traces_json, show_axes, default_voltage=5.0,
+                            v_to_ma=1.123):
     """Write a single interactive HTML viewer with PW dropdown and voltage input."""
     opts_html = "\n".join(
         f'      <option value="{key}">{label}</option>' for key, label in pw_options
@@ -568,10 +569,11 @@ def write_interactive_html(path, fiber_coords, all_thresholds, pw_options,
     html = html.replace("___PW_OPTIONS___", opts_html)
     html = html.replace("___FIBERS_DATA___", json.dumps(fiber_coords))
     html = html.replace("___THRESHOLDS_DATA___", json.dumps(all_thresholds))
-    html = html.replace("___EFIELD_DATA___", efield_traces_json)
+    html = html.replace("___VOLTAGE_DATA___", voltage_traces_json)
     html = html.replace("___SHOW_AXES___", "true" if show_axes else "false")
+    html = html.replace("___V_TO_MA___", str(v_to_ma))
     html = html.replace("___DEFAULT_VOLTAGE___", str(default_voltage))
-    html = html.replace("___DEFAULT_MA___", str(round(default_voltage * 1.123, 3)))
+    html = html.replace("___DEFAULT_MA___", str(round(default_voltage * v_to_ma, 3)))
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"Wrote interactive HTML: {path}")
@@ -584,7 +586,7 @@ def write_interactive_html(path, fiber_coords, all_thresholds, pw_options,
 def render(fibers, thresholds, voltage, electrode_center, title="",
            show_axes=False, electrode_config=None, field_data=None,
            max_simplify=3):
-    """Build a Plotly figure with activated/inactive fibers and optional E-field."""
+    """Build a Plotly figure with activated/inactive fibers and optional Voltage."""
     fig = go.Figure()
 
     active, inactive = [], []
@@ -622,11 +624,11 @@ def render(fibers, thresholds, voltage, electrode_center, title="",
             visible="legendonly",  # inactive fibers hidden by default
         ))
 
-    # Electric field (replaces lead mesh)
-    n_before_efield = len(fig.data)
+    # Voltage (replaces lead mesh)
+    n_before_voltage = len(fig.data)
     if field_data is not None:
         X, Y, Z, V = field_data
-        add_electric_field(fig, X, Y, Z, V)
+        add_voltage(fig, X, Y, Z, V)
 
     # Axes toggle visibility
     show = show_axes
@@ -658,18 +660,18 @@ def render(fibers, thresholds, voltage, electrode_center, title="",
         margin=dict(l=60, r=0, t=30, b=0),
     )
 
-    # Add E-field toggle button
+    # Add Voltage toggle button
     if field_data is not None:
-        efield_indices = list(range(n_before_efield, len(fig.data)))
-        n_ef = len(efield_indices)
+        voltage_indices = list(range(n_before_voltage, len(fig.data)))
+        n_ef = len(voltage_indices)
         fig.update_layout(
             updatemenus=[dict(
                 type="buttons",
                 buttons=[dict(
-                    label="Toggle Electric Field",
+                    label="Toggle Voltage",
                     method="restyle",
-                    args=[{"visible": [False] * n_ef}, efield_indices],
-                    args2=[{"visible": [True] * n_ef}, efield_indices],
+                    args=[{"visible": [False] * n_ef}, voltage_indices],
+                    args2=[{"visible": [True] * n_ef}, voltage_indices],
                 )],
                 showactive=True,
                 x=0.0, xanchor="left",
@@ -750,13 +752,18 @@ Examples
     parser.add_argument(
         "--electrode", type=str, default=None, metavar="FILE",
         help="Path to the electrode FEM export file (.txt, COMSOL format). "
-             "When provided, an electric-field isosurface is shown instead of a "
+             "When provided, an voltage isosurface is shown instead of a "
              "lead mesh.  Toggle it on/off in the legend.",
     )
     parser.add_argument(
         "--field_subsample", type=int, default=4, metavar="N",
         help="Subsample the electrode grid by keeping every Nth point per axis. "
              "Default: 4.  Increase to reduce memory / rendering time.",
+    )
+    parser.add_argument(
+        "--v_to_ma", type=float, default=1.123, metavar="FACTOR",
+        help="Voltage-to-current conversion factor (mA per V). "
+             "E.g. use 0.01 if 1 V = 0.01 A = 10 mA. Default: 1.123",
     )
 
     args = parser.parse_args()
@@ -765,10 +772,10 @@ Examples
     electrode_center = tuple(args.electrode_center) if args.electrode_center else (0, 0, 0)
     electrode_config = parse_electrode_config(args.electrode_config) if args.electrode_config else None
 
-    # Load electric field if an electrode file was provided
+    # Load voltage if an electrode file was provided
     field_data = None
     if args.electrode:
-        field_data = load_electrode_field(
+        field_data = load_electrode_voltage(
             args.electrode,
             subsample=args.field_subsample,
             electrode_center=electrode_center,
@@ -826,14 +833,15 @@ Examples
         all_thresholds[pw_us] = padded
         pw_options.append((pw_us, f"{pw_us} \u03bcs"))
 
-    # E-field traces
-    efield_json = prepare_efield_traces(field_data)
+    # Voltage traces
+    voltage_json = prepare_voltage_traces(field_data)
 
     # Generate single interactive HTML
     out_html = os.path.join(args.output, "activation.html")
     write_interactive_html(
         out_html, fiber_coords, all_thresholds, pw_options,
-        efield_json, args.show_axes, default_voltage=args.activation_threshold,
+        voltage_json, args.show_axes, default_voltage=args.activation_threshold,
+        v_to_ma=args.v_to_ma,
     )
     print(f"\nDone. Interactive viewer -> {out_html}")
 
