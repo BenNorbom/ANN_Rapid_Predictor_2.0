@@ -110,7 +110,7 @@ python graphing/plot_tracts_fast.py \
 Then open `output_viz/activation.html` in your browser. Use the dropdown to
 switch pulse widths and the voltage input to adjust the activation threshold.
 
-To overlay the electric potential field, add `--electrode` and `--electrode_center`:
+To overlay the voltage field, add `--electrode` and `--electrode_center`:
 
 ```bash
 python graphing/plot_tracts_fast.py \

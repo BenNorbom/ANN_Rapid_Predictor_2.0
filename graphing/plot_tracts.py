@@ -738,8 +738,8 @@ def main():
                         help="Subsample the electrode grid by keeping every Nth point per axis. "
                              "Default: 4.")
     parser.add_argument("--v_to_ma", type=float, default=1.123, metavar="FACTOR",
-                        help="Voltage-to-current conversion factor (mA per V). "
-                             "E.g. use 0.01 if 1 V = 0.01 A = 10 mA. Default: 1.123")
+                        help="Voltage-to-current conversion factor in mA per V. "
+                             "E.g. use 0.1 if 1 V = 0.1 mA. Default: 1.123")
 
     args = parser.parse_args()
 
