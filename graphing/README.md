@@ -49,7 +49,7 @@ python graphing/plot_tracts_fast.py --tract <TRACT_FILE> --results <RESULTS_JSON
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--activation_threshold VOLTS` | `5.0` | Default voltage (V) below which a fiber is considered **activated**. Can be changed interactively in the HTML viewer. |
-| `--electrode FILE` | none | Path to the electrode FEM export file (`.txt`, COMSOL format). When provided, an electric-field volume is rendered. |
+| `--electrode FILE` | none | Path to the electrode FEM export file (`.txt`, COMSOL format). When provided, an voltage volume is rendered. |
 | `--electrode_center X Y Z` | `0 0 0` | X Y Z voxel position of the electrode center. Used to re-center the FEM grid so the field aligns with the fiber tracts. |
 | `--electrode_config CONFIG` | none | Contact configuration string (e.g. `01-23`, `+012-3`, `-0+1-2+3`). `-` = cathode (red), `+` = anode (blue), unmarked = inactive (grey). |
 | `--field_subsample N` | `4` | Keep every Nth point per axis when loading the electrode grid. Increase to reduce memory and rendering time. |
@@ -61,13 +61,13 @@ python graphing/plot_tracts_fast.py --tract <TRACT_FILE> --results <RESULTS_JSON
 ### Examples
 
 ```bash
-# Basic usage (no electric field)
+# Basic usage (no voltage)
 python graphing/plot_tracts_fast.py \
     --tract example_tracks/L_DRTT_voxel.txt \
     --results run/results.json \
     --output output_viz/
 
-# With electric field overlay
+# With voltage overlay
 python graphing/plot_tracts_fast.py \
     --tract example_tracks/L_DRTT_voxel.txt \
     --results run/results.json \
@@ -112,7 +112,7 @@ python graphing/plot_tracts.py --tract <TRACT_FILE> --results <RESULTS_JSON> --o
 |----------|---------|-------------|
 | `--voltage VOLTS` | `5.0` | Default activation threshold voltage. Can be changed interactively in the HTML viewer. |
 | `--cond TYPE` | `anisotropic` | Conductivity type: `anisotropic` or `isotropic`. |
-| `--electrode FILE` | none | Path to the electrode FEM export file. Renders an electric-field volume in the 3D scene. |
+| `--electrode FILE` | none | Path to the electrode FEM export file. Renders an voltage volume in the 3D scene. |
 | `--electrode_center X Y Z` | none | X Y Z voxel position of the electrode center for field re-centering. |
 | `--electrode_config CONFIG` | none | Electrode contact configuration string (same format as above). |
 | `--field_subsample N` | `4` | Subsample the electrode grid by keeping every Nth point per axis. |
@@ -129,7 +129,7 @@ python graphing/plot_tracts.py \
     --results run/results.json \
     --output output_viz/
 
-# With electric field overlay
+# With voltage overlay
 python graphing/plot_tracts.py \
     --tract example_tracks/L_DRTT_voxel.txt \
     --results run/results.json \
@@ -262,7 +262,7 @@ python graphing/plot_tracts_bundles.py \
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--activation_threshold VOLTS` | `5.0` | Default voltage (V) below which a fiber is considered **activated**. Can be changed interactively in the HTML viewer. |
-| `--electrode FILE` | none | Path to the electrode FEM export file (`.txt`, COMSOL format). Renders an electric-field volume. |
+| `--electrode FILE` | none | Path to the electrode FEM export file (`.txt`, COMSOL format). Renders an voltage volume. |
 | `--electrode_center X Y Z` | `0 0 0` | X Y Z voxel position of the electrode center for re-centering the FEM grid. |
 | `--electrode_config CONFIG` | none | Contact configuration string (e.g. `01-23`, `+012-3`, `-0+1-2+3`). |
 | `--field_subsample N` | `4` | Keep every Nth point per axis when loading the electrode grid. |
@@ -292,7 +292,7 @@ python graphing/plot_tracts_bundles.py \
     --output output_viz_bundles/ \
     --all_fibers --show_axes
 
-# With electric field overlay
+# With voltage overlay
 python graphing/plot_tracts_bundles.py \
     --tract example_tracks/L_combined_DRTT_ML_PTR_voxel.txt \
     --results run/results.json \
@@ -306,12 +306,12 @@ python graphing/plot_tracts_bundles.py \
 
 ---
 
-## Electric Field Visualization — Technical Details
+## Voltage Visualization — Technical Details
 
-All three scripts share the same electric field rendering pipeline. This section
+All three scripts share the same voltage rendering pipeline. This section
 describes the implementation in detail.
 
-### Data Loading (`load_electrode_field`)
+### Data Loading (`load_electrode_voltage`)
 
 The electrode FEM export file is a COMSOL text file with columns `x y z V`.
 The loader:
@@ -388,7 +388,7 @@ marching-cubes isosurfacing on the client side in WebGL. Key parameters:
 
 ### Toggle Button
 
-A Plotly `updatemenus` button labelled **Toggle Electric Field** is added to
+A Plotly `updatemenus` button labelled **Toggle Voltage** is added to
 the top-left of each figure. Clicking it toggles the visibility of the Volume
 trace using `restyle` with `args` / `args2`, providing a true on/off toggle
 independent of the legend.
@@ -419,7 +419,7 @@ without re-running the script or generating multiple files.
 Each plot has clickable legend groups you can show/hide:
 - **Activated** — fibers below the activation threshold (shown by default)
 - **Inactive** — fibers above the threshold (hidden by default; click to show)
-- **Electric Field** — the volume rendering (shown by default when `--electrode` is given; also togglable via the button)
+- **Voltage** — the volume rendering (shown by default when `--electrode` is given; also togglable via the button)
 
 ---
 
